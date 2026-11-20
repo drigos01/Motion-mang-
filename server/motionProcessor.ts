@@ -82,6 +82,15 @@ interface FfprobeOutput {
   streams?: FfprobeStream[];
 }
 
+function isMissingBinaryError(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+  );
+}
+
 async function runFfprobe(filePath: string): Promise<FfprobeOutput> {
   const { stdout } = await execFileAsync(
     FFPROBE_BIN,
@@ -261,7 +270,13 @@ export async function validateAndProcessMotionUpload(
       let probe: FfprobeOutput;
       try {
         probe = await runFfprobe(inputPath);
-      } catch {
+      } catch (err) {
+        if (isMissingBinaryError(err)) {
+          throw new MotionValidationError(
+            'A validação/recorte de vídeo Motion no servidor requer ffprobe/ffmpeg (indisponível neste ambiente serverless).',
+            422
+          );
+        }
         throw new MotionValidationError(
           'Não foi possível ler os metadados reais do vídeo enviado.',
           400
@@ -372,6 +387,12 @@ export async function validateAndProcessMotionUpload(
           maxBuffer: MEDIA_CMD_MAX_BUFFER,
         });
       } catch (err) {
+        if (isMissingBinaryError(err)) {
+          throw new MotionValidationError(
+            'Recorte automático de vídeo indisponível neste ambiente (ffmpeg ausente). Envie o vídeo já na proporção exata da página.',
+            422
+          );
+        }
         throw new MotionValidationError(
           `Falha ao recortar o vídeo Motion no servidor: ${
             err instanceof Error ? err.message : 'erro desconhecido'
@@ -535,6 +556,12 @@ export async function validateAndProcessMotionUpload(
         );
       }
     } catch (err) {
+      if (isMissingBinaryError(err)) {
+        throw new MotionValidationError(
+          `Recorte automático de ${detectedFormat.toUpperCase()} indisponível neste ambiente (binário de mídia ausente). Envie a animação já na proporção da página.`,
+          422
+        );
+      }
       throw new MotionValidationError(
         `Falha ao recortar ${detectedFormat.toUpperCase()} no servidor: ${
           err instanceof Error ? err.message : 'erro desconhecido'

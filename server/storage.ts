@@ -10,19 +10,45 @@ import {
   HeadObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import {
+  getAppConfig,
+  getS3CredentialsFingerprint,
+  type RuntimePlatform,
+  type StorageConfig,
+  type StorageDriver,
+} from './config.ts';
 
-export type StorageDriver = 's3' | 'local';
+export type { StorageDriver };
+
+export class StorageConfigError extends Error {
+  public readonly statusCode: number;
+
+  constructor(message: string, statusCode = 500) {
+    super(message);
+    this.name = 'StorageConfigError';
+    this.statusCode = statusCode;
+  }
+}
 
 export interface StorageConfigStatus {
   driver: StorageDriver;
+  requestedDriver: string;
+  configured: boolean;
   bucketConfigured: boolean;
   publicUrlConfigured: boolean;
   endpointConfigured: boolean;
+  endpointHost: string | null;
   proxyMode: boolean;
   localUploadDir: string;
+  missingVars: string[];
+  errors: string[];
+  warnings: string[];
+  platform: RuntimePlatform;
+  isVercel: boolean;
 }
 
 const LOCAL_MEDIA_ROOT = path.resolve(process.cwd(), 'storage', 'media');
+const s3ClientCache = new Map<string, S3Client>();
 
 function ensureLocalDir(dirPath: string) {
   if (!fs.existsSync(dirPath)) {
@@ -31,38 +57,76 @@ function ensureLocalDir(dirPath: string) {
 }
 
 export function getStorageConfigStatus(): StorageConfigStatus {
-  const hasS3Creds = Boolean(
-    process.env.STORAGE_DRIVER === 's3' &&
-      process.env.S3_BUCKET &&
-      process.env.S3_ACCESS_KEY_ID &&
-      process.env.S3_SECRET_ACCESS_KEY
-  );
+  const { runtime, storage } = getAppConfig();
 
   return {
-    driver: hasS3Creds ? 's3' : 'local',
-    bucketConfigured: Boolean(process.env.S3_BUCKET),
-    publicUrlConfigured: Boolean(process.env.S3_PUBLIC_URL),
-    endpointConfigured: Boolean(process.env.S3_ENDPOINT),
-    proxyMode: true,
-    localUploadDir: 'storage/media',
+    driver: storage.driver,
+    requestedDriver: storage.requestedDriver,
+    configured: storage.configured,
+    bucketConfigured: storage.bucketConfigured,
+    publicUrlConfigured: storage.publicUrlConfigured,
+    endpointConfigured: storage.endpointConfigured,
+    endpointHost: storage.endpointHost,
+    proxyMode: storage.proxyMode,
+    localUploadDir: storage.localUploadDir,
+    missingVars: storage.missingVars,
+    errors: storage.errors,
+    warnings: storage.warnings,
+    platform: runtime.platform,
+    isVercel: runtime.isVercel,
   };
 }
 
-function getS3Client(): S3Client | null {
-  const status = getStorageConfigStatus();
-  if (status.driver !== 's3') return null;
-
+export function createS3ClientFromConfig(storage: StorageConfig): S3Client {
   return new S3Client({
-    region: process.env.S3_REGION || 'us-east-1',
-    endpoint: process.env.S3_ENDPOINT || undefined,
-    forcePathStyle: Boolean(process.env.S3_ENDPOINT),
+    region: storage.region || 'us-east-1',
+    endpoint: storage.endpoint || undefined,
+    forcePathStyle: Boolean(storage.endpoint),
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
     },
   });
+}
+
+function resolveActiveStorage(): {
+  driver: StorageDriver;
+  storage: StorageConfig;
+  s3: S3Client | null;
+} {
+  const { runtime, storage } = getAppConfig();
+
+  if (!storage.configured) {
+    throw new StorageConfigError(
+      storage.errors[0] ||
+        'Configuração de armazenamento inválida ou incompleta no servidor.',
+      500
+    );
+  }
+
+  if (storage.driver === 's3') {
+    const fingerprint = getS3CredentialsFingerprint(storage);
+    let client = s3ClientCache.get(fingerprint);
+    if (!client) {
+      if (s3ClientCache.size >= 4) {
+        s3ClientCache.clear();
+      }
+      client = createS3ClientFromConfig(storage);
+      s3ClientCache.set(fingerprint, client);
+    }
+    return { driver: 's3', storage, s3: client };
+  }
+
+  if (runtime.isVercel) {
+    throw new StorageConfigError(
+      'O armazenamento local não é suportado no Vercel. Defina STORAGE_DRIVER=s3 e configure S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID e S3_SECRET_ACCESS_KEY.',
+      500
+    );
+  }
+
+  return { driver: 'local', storage, s3: null };
 }
 
 export function sanitizeSegment(input: string): string {
@@ -188,9 +252,9 @@ export async function saveMediaFile(params: {
     .join('/');
   const key = `${cleanFolder}/${uniqueId}${ext}`;
 
-  const s3 = getS3Client();
-  if (s3 && process.env.S3_BUCKET) {
-    const bucket = process.env.S3_BUCKET;
+  const { driver, storage, s3 } = resolveActiveStorage();
+  if (driver === 's3' && s3) {
+    const bucket = storage.bucket;
 
     await s3.send(
       new PutObjectCommand({
@@ -257,12 +321,12 @@ export async function headMediaFile(relativeKey: string): Promise<MediaHeadResul
   const cleanKey = normalizeMediaKey(relativeKey);
   if (!cleanKey) return null;
 
-  const s3 = getS3Client();
-  if (s3 && process.env.S3_BUCKET) {
+  const { driver, storage, s3 } = resolveActiveStorage();
+  if (driver === 's3' && s3) {
     try {
       const head = await s3.send(
         new HeadObjectCommand({
-          Bucket: process.env.S3_BUCKET,
+          Bucket: storage.bucket,
           Key: cleanKey,
         })
       );
@@ -319,9 +383,9 @@ export async function getMediaFileStream(
     return { kind: 'invalid_range' };
   }
 
-  const s3 = getS3Client();
-  if (s3 && process.env.S3_BUCKET) {
-    const bucket = process.env.S3_BUCKET;
+  const { driver, storage, s3 } = resolveActiveStorage();
+  if (driver === 's3' && s3) {
+    const bucket = storage.bucket;
     try {
       const response = await s3.send(
         new GetObjectCommand({
@@ -425,12 +489,12 @@ export async function deleteMediaFile(key: string): Promise<void> {
     throw new Error('Chave de arquivo inválida para exclusão.');
   }
 
-  const s3 = getS3Client();
-  if (s3 && process.env.S3_BUCKET) {
+  const { driver, storage, s3 } = resolveActiveStorage();
+  if (driver === 's3' && s3) {
     try {
       await s3.send(
         new DeleteObjectCommand({
-          Bucket: process.env.S3_BUCKET,
+          Bucket: storage.bucket,
           Key: cleanKey,
         })
       );

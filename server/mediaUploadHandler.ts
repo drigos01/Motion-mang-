@@ -19,7 +19,8 @@ import {
   readMediaFileBuffer,
   saveMediaFile,
   sanitizeSegment,
-  StoredFileResult,
+  StorageConfigError,
+  type StoredFileResult,
 } from './storage.ts';
 
 const execFileAsync = promisify(execFile);
@@ -150,6 +151,14 @@ async function normalizeAvatarImageBuffer(
     };
   } catch (err) {
     if (err instanceof MotionValidationError) throw err;
+    const isMissingConvert =
+      Boolean(err && typeof err === 'object' && 'code' in err && (err as { code?: unknown }).code === 'ENOENT');
+    if (isMissingConvert) {
+      throw new MotionValidationError(
+        'Conversão automática de HEIC/AVIF/GIF indisponível neste ambiente. Envie sua foto em JPG, PNG ou WebP.',
+        422
+      );
+    }
     throw new MotionValidationError(
       'Não foi possível processar esta foto no servidor. Tente enviar em JPG, PNG ou WebP.',
       400
@@ -335,6 +344,10 @@ export function createMediaUploadHandler(deps: MediaUploadHandlerDeps = {}) {
       res.status(201).json(motionMetadata ? { ...stored, motion: motionMetadata } : stored);
     } catch (err) {
       if (err instanceof MotionValidationError) {
+        res.status(err.statusCode).json({ error: err.message });
+        return;
+      }
+      if (err instanceof StorageConfigError) {
         res.status(err.statusCode).json({ error: err.message });
         return;
       }

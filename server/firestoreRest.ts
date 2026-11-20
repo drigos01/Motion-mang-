@@ -1,11 +1,9 @@
-import fs from 'fs';
-import path from 'path';
+import {
+  loadFirebaseAppletConfig as loadCentralFirebaseConfig,
+  type FirebaseAppletConfig,
+} from './config.ts';
 
-export interface FirebaseAppletConfig {
-  apiKey?: string;
-  projectId?: string;
-  firestoreDatabaseId?: string;
-}
+export type { FirebaseAppletConfig };
 
 export const BOOTSTRAP_ADMIN_EMAIL = 'helciorodri@gmail.com';
 
@@ -37,13 +35,7 @@ export class FirestoreRestError extends Error {
 }
 
 export function loadFirebaseAppletConfig(): FirebaseAppletConfig {
-  const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-  if (!fs.existsSync(configPath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf-8')) as FirebaseAppletConfig;
-  } catch {
-    return {};
-  }
+  return loadCentralFirebaseConfig();
 }
 
 function getFirestoreBasePaths() {

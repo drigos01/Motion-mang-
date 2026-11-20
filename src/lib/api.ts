@@ -21,13 +21,23 @@ export interface UploadedMediaResult {
 
 export interface StorageStatusResponse {
   driver: 's3' | 'local';
+  requestedDriver?: string;
+  configured?: boolean;
   bucketConfigured: boolean;
   publicUrlConfigured: boolean;
   endpointConfigured: boolean;
+  endpointHost?: string | null;
   proxyMode?: boolean;
   localUploadDir: string;
+  missingVars?: string[];
+  errors?: string[];
+  warnings?: string[];
+  platform?: 'vercel' | 'aistudio' | 'node';
+  isVercel?: boolean;
   firebaseConfigured: boolean;
   firebaseProjectId: string | null;
+  firebaseDatabaseId?: string;
+  geminiConfigured?: boolean;
 }
 
 export async function fetchStorageStatus(): Promise<StorageStatusResponse> {

@@ -766,20 +766,25 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
 
             <div className="p-4 rounded-xl bg-[#08080A] border border-white/8 space-y-1.5">
               <div className="font-semibold text-white">
-                Armazenamento de Arquivos ({storage?.driver === 's3' ? 'S3 / R2 Ativo' : 'Local Gerenciado'})
+                Armazenamento de Arquivos ({storage?.driver === 's3' ? 'Bunny / S3 Ativo' : 'Local Gerenciado'})
               </div>
               <p className="text-zinc-400">
-                Uploads atuais gravam arquivos binários reais com streaming HTTP Byte-Range (206
+                Uploads atuais gravam arquivos binários reais com entrega via proxy{' '}
+                <code className="text-zinc-200">/api/media/file/*</code> e streaming HTTP Byte-Range (206
                 Partial Content) para loops Motion MP4/WebM.
               </p>
               <p className="text-zinc-400">
-                Para escalar para CDN externa (AWS S3, Cloudflare R2 ou GCS Interop), defina{' '}
+                Para produção (Vercel / Bunny Storage S3), defina{' '}
                 <code className="text-zinc-200">
-                  STORAGE_DRIVER=s3, S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
-                  S3_PUBLIC_URL
+                  STORAGE_DRIVER=s3, S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
                 </code>{' '}
-                nas variáveis de ambiente.
+                (<code className="text-zinc-200">S3_PUBLIC_URL</code> opcional — Pull Zone não obrigatório).
               </p>
+              {storage?.errors && storage.errors.length > 0 && (
+                <p className="text-amber-400">
+                  Atenção na configuração: {storage.errors.join(' ')}
+                </p>
+              )}
             </div>
           </div>
         </div>
