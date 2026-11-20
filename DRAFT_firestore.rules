@@ -1,0 +1,1377 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection health check document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidFollowId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 260 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'helciorodri@gmail.com'
+      );
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'handle', 'avatarUrl', 'bio',
+          'accountType', 'followersCount', 'worksCount', 'isSuspended',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'handle', 'avatarUrl', 'bio',
+          'accountType', 'followersCount', 'worksCount', 'isSuspended',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.uid == userId &&
+        isValidId(data.uid) &&
+        isValidString(data.displayName, 1, 80) &&
+        isValidString(data.handle, 2, 40) &&
+        data.handle.matches('^[a-zA-Z0-9_.\\-]+$') &&
+        isValidString(data.avatarUrl, 0, 600) &&
+        isValidString(data.bio, 0, 400) &&
+        data.accountType in ['reader', 'creator'] &&
+        data.followersCount is number && data.followersCount >= 0 &&
+        data.worksCount is number && data.worksCount >= 0 &&
+        data.isSuspended is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'preferredMode', 'nightMode', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'preferredMode', 'nightMode',
+          'layoutMode', 'fitMode', 'nightTheme', 'brightness', 'zoom',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.uid == userId &&
+        isValidId(data.uid) &&
+        isValidString(data.email, 0, 160) &&
+        data.preferredMode in ['original', 'motion'] &&
+        data.nightMode is bool &&
+        (!('layoutMode' in data) || data.layoutMode in ['single', 'vertical']) &&
+        (!('fitMode' in data) || data.fitMode in ['fit-width', 'fit-height', 'actual']) &&
+        (!('nightTheme' in data) || data.nightTheme in ['oled', 'slate', 'warm-dark']) &&
+        (!('brightness' in data) || (data.brightness is number && data.brightness >= 40 && data.brightness <= 100)) &&
+        (!('zoom' in data) || (data.zoom is number && data.zoom >= 50 && data.zoom <= 250)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminDoc(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedAt']) &&
+        data.uid == userId &&
+        isValidId(data.uid) &&
+        isValidString(data.email, 3, 160) &&
+        data.grantedAt is timestamp;
+    }
+
+    function isValidManga(data, mangaId) {
+      return data.keys().hasAll([
+          'id', 'authorId', 'authorName', 'title', 'slug', 'synopsis',
+          'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status',
+          'moderationStatus', 'isFeatured', 'hasMotion', 'chaptersCount',
+          'viewsCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'authorId', 'authorName', 'title', 'slug', 'synopsis',
+          'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status',
+          'moderationStatus', 'isFeatured', 'hasMotion', 'chaptersCount',
+          'viewsCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'stimulusSettledViews', 'stimulusWindows',
+          'launchedAt', 'launchedFromPreLaunch',
+          'previewEnabled', 'previewSlug', 'previewToken', 'previewKey',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == mangaId &&
+        isValidId(data.id) &&
+        isValidId(data.authorId) &&
+        isValidString(data.authorName, 1, 80) &&
+        isValidString(data.title, 1, 140) &&
+        isValidString(data.slug, 1, 160) &&
+        isValidString(data.synopsis, 1, 3000) &&
+        isValidString(data.coverUrl, 0, 600) &&
+        isValidString(data.bannerUrl, 0, 600) &&
+        data.genres is list && data.genres.size() >= 1 && data.genres.size() <= 6 &&
+        data.genres[0] is string && data.genres[0].size() >= 1 && data.genres[0].size() <= 40 &&
+        data.ageRating in ['Livre', '12+', '14+', '16+', '18+'] &&
+        data.status in ['draft', 'pre_launch', 'ongoing', 'completed', 'hiatus', 'archived'] &&
+        data.moderationStatus in ['approved', 'pending', 'flagged', 'removed'] &&
+        data.isFeatured is bool &&
+        data.hasMotion is bool &&
+        data.chaptersCount is number && data.chaptersCount >= 0 &&
+        data.viewsCount is number && data.viewsCount >= 0 &&
+        data.favoritesCount is number && data.favoritesCount >= 0 &&
+        data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5 &&
+        data.ratingCount is number && data.ratingCount >= 0 &&
+        (!('stimulusSettledViews' in data) || (data.stimulusSettledViews is number && data.stimulusSettledViews >= 0)) &&
+        (!('stimulusWindows' in data) || (
+          data.stimulusWindows is list &&
+          data.stimulusWindows.size() <= 10 &&
+          (data.stimulusWindows.size() == 0 || (
+            data.stimulusWindows[0] is map &&
+            data.stimulusWindows[0].keys().hasAll(['chapterId', 'startedAtMs', 'budget', 'seed', 'durationHours']) &&
+            data.stimulusWindows[0].keys().hasOnly(['chapterId', 'startedAtMs', 'budget', 'seed', 'durationHours']) &&
+            isValidString(data.stimulusWindows[0].chapterId, 1, 128) &&
+            data.stimulusWindows[0].startedAtMs is number && data.stimulusWindows[0].startedAtMs > 0 &&
+            data.stimulusWindows[0].budget is number && data.stimulusWindows[0].budget >= 0 && data.stimulusWindows[0].budget <= 1000 &&
+            data.stimulusWindows[0].seed is number && data.stimulusWindows[0].seed >= 1 && data.stimulusWindows[0].seed <= 999999 &&
+            data.stimulusWindows[0].durationHours is number && data.stimulusWindows[0].durationHours >= 1 && data.stimulusWindows[0].durationHours <= 168
+          ))
+        )) &&
+        (!('launchedAt' in data) || data.launchedAt is timestamp) &&
+        (!('launchedFromPreLaunch' in data) || data.launchedFromPreLaunch is bool) &&
+        (!('previewEnabled' in data) || data.previewEnabled is bool) &&
+        (!('previewSlug' in data) || (
+          isValidString(data.previewSlug, 0, 80) &&
+          (data.previewSlug == '' || data.previewSlug.matches('^[a-z0-9\\-]+$'))
+        )) &&
+        (!('previewToken' in data) || (
+          isValidString(data.previewToken, 0, 40) &&
+          (data.previewToken == '' || data.previewToken.matches('^[a-zA-Z0-9_\\-]+$'))
+        )) &&
+        (!('previewKey' in data) || (
+          isValidString(data.previewKey, 0, 128) &&
+          (data.previewKey == '' || data.previewKey.matches('^[a-zA-Z0-9_\\-]+$'))
+        )) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidChapter(data, mangaId, chapterId) {
+      return data.keys().hasAll([
+          'id', 'mangaId', 'authorId', 'chapterNumber', 'title',
+          'status', 'hasMotion', 'pagesCount', 'viewsCount',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'mangaId', 'authorId', 'chapterNumber', 'title',
+          'status', 'hasMotion', 'pagesCount', 'viewsCount',
+          'firstPublishedAt', 'stimulusBudget', 'stimulusSeed', 'stimulusDurationHours',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == chapterId &&
+        data.mangaId == mangaId &&
+        isValidId(data.id) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.authorId) &&
+        data.chapterNumber is number && data.chapterNumber >= 0 && data.chapterNumber <= 10000 &&
+        isValidString(data.title, 1, 140) &&
+        data.status in ['draft', 'published'] &&
+        data.hasMotion is bool &&
+        data.pagesCount is number && data.pagesCount >= 0 && data.pagesCount <= 500 &&
+        data.viewsCount is number && data.viewsCount >= 0 &&
+        (!('firstPublishedAt' in data) || data.firstPublishedAt is timestamp) &&
+        (!('stimulusBudget' in data) || (data.stimulusBudget is number && data.stimulusBudget >= 0 && data.stimulusBudget <= 1000)) &&
+        (!('stimulusSeed' in data) || (data.stimulusSeed is number && data.stimulusSeed >= 1 && data.stimulusSeed <= 999999)) &&
+        (!('stimulusDurationHours' in data) || (data.stimulusDurationHours is number && data.stimulusDurationHours >= 1 && data.stimulusDurationHours <= 168)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPage(data, mangaId, chapterId, pageId) {
+      return data.keys().hasAll([
+          'id', 'mangaId', 'chapterId', 'authorId', 'chapterStatus',
+          'pageNumber', 'originalUrl', 'originalMime', 'motionUrl', 'motionMime',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'mangaId', 'chapterId', 'authorId', 'chapterStatus',
+          'pageNumber', 'originalUrl', 'originalMime', 'motionUrl', 'motionMime',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == pageId &&
+        data.mangaId == mangaId &&
+        data.chapterId == chapterId &&
+        isValidId(data.id) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.chapterId) &&
+        isValidId(data.authorId) &&
+        data.chapterStatus in ['draft', 'published'] &&
+        data.pageNumber is number && data.pageNumber >= 1 && data.pageNumber <= 500 &&
+        isValidString(data.originalUrl, 1, 600) &&
+        isValidString(data.originalMime, 1, 80) &&
+        isValidString(data.motionUrl, 0, 600) &&
+        isValidString(data.motionMime, 0, 80) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidComment(data, mangaId, chapterId, commentId) {
+      return data.keys().hasAll([
+          'id', 'mangaId', 'chapterId', 'userId', 'userName',
+          'userAvatar', 'content', 'isHidden', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'mangaId', 'chapterId', 'userId', 'userName',
+          'userAvatar', 'content', 'parentId', 'replyToUserId', 'replyToUserName',
+          'isAuthorReply', 'isHidden', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == commentId &&
+        data.mangaId == mangaId &&
+        data.chapterId == chapterId &&
+        isValidId(data.id) &&
+        isValidId(data.userId) &&
+        isValidString(data.userName, 1, 80) &&
+        isValidString(data.userAvatar, 0, 600) &&
+        isValidString(data.content, 1, 1500) &&
+        (!('parentId' in data) || isValidString(data.parentId, 0, 128)) &&
+        (!('replyToUserId' in data) || isValidString(data.replyToUserId, 0, 128)) &&
+        (!('replyToUserName' in data) || isValidString(data.replyToUserName, 0, 80)) &&
+        (!('isAuthorReply' in data) || data.isAuthorReply is bool) &&
+        (!('isAuthorReply' in data) || data.isAuthorReply == false ||
+          (exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+           get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid)) &&
+        data.isHidden is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRating(data, mangaId, userId) {
+      return data.keys().hasAll(['userId', 'mangaId', 'score', 'review', 'userName', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'mangaId', 'score', 'review', 'userName', 'createdAt', 'updatedAt']) &&
+        data.userId == userId &&
+        data.mangaId == mangaId &&
+        data.score is number && data.score >= 1 && data.score <= 5 &&
+        isValidString(data.review, 0, 600) &&
+        isValidString(data.userName, 1, 80) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFavorite(data, userId, mangaId) {
+      return data.keys().hasAll(['userId', 'mangaId', 'mangaTitle', 'coverUrl', 'authorName', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'mangaId', 'mangaTitle', 'coverUrl', 'authorName', 'addedDuringPreLaunch', 'previewKey', 'createdAt']) &&
+        data.userId == userId &&
+        data.mangaId == mangaId &&
+        isValidString(data.mangaTitle, 1, 140) &&
+        isValidString(data.coverUrl, 0, 600) &&
+        isValidString(data.authorName, 1, 80) &&
+        (!('addedDuringPreLaunch' in data) || data.addedDuringPreLaunch is bool) &&
+        (!('previewKey' in data) || isValidString(data.previewKey, 0, 128)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidHistory(data, userId, mangaId) {
+      return data.keys().hasAll([
+          'userId', 'mangaId', 'mangaTitle', 'coverUrl', 'chapterId',
+          'chapterNumber', 'chapterTitle', 'pageNumber', 'totalPages',
+          'preferredMode', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'mangaId', 'mangaTitle', 'coverUrl', 'chapterId',
+          'chapterNumber', 'chapterTitle', 'pageNumber', 'totalPages',
+          'preferredMode', 'updatedAt'
+        ]) &&
+        data.userId == userId &&
+        data.mangaId == mangaId &&
+        isValidString(data.mangaTitle, 1, 140) &&
+        isValidString(data.coverUrl, 0, 600) &&
+        isValidId(data.chapterId) &&
+        data.chapterNumber is number && data.chapterNumber >= 0 &&
+        isValidString(data.chapterTitle, 1, 140) &&
+        data.pageNumber is number && data.pageNumber >= 1 &&
+        data.totalPages is number && data.totalPages >= 1 &&
+        data.preferredMode in ['original', 'motion'] &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFollow(data, followId) {
+      return data.keys().hasAll(['id', 'followerId', 'authorId', 'authorName', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'followerId', 'authorId', 'authorName', 'createdAt']) &&
+        data.id == followId &&
+        isValidFollowId(data.id) &&
+        isValidId(data.followerId) &&
+        isValidId(data.authorId) &&
+        data.followerId != data.authorId &&
+        isValidString(data.authorName, 1, 80) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return data.keys().hasAll([
+          'id', 'recipientId', 'actorId', 'actorName', 'type',
+          'title', 'message', 'linkMangaId', 'linkChapterId', 'isRead', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'recipientId', 'actorId', 'actorName', 'type',
+          'title', 'message', 'linkMangaId', 'linkChapterId', 'isRead', 'createdAt'
+        ]) &&
+        data.id == notificationId &&
+        isValidId(data.id) &&
+        isValidId(data.recipientId) &&
+        isValidId(data.actorId) &&
+        isValidString(data.actorName, 1, 80) &&
+        data.type in ['new_chapter', 'pre_launch_release', 'new_comment', 'new_follower', 'moderation', 'manga_deleted', 'account_removed', 'monetization'] &&
+        isValidString(data.title, 1, 140) &&
+        isValidString(data.message, 1, 300) &&
+        isValidString(data.linkMangaId, 0, 128) &&
+        isValidString(data.linkChapterId, 0, 128) &&
+        data.isRead is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidMangaReader(data, mangaId, userId) {
+      return data.keys().hasAll(['userId', 'mangaId', 'authorId', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'mangaId', 'authorId', 'updatedAt']) &&
+        data.userId == userId &&
+        data.mangaId == mangaId &&
+        isValidId(data.userId) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.authorId) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidReport(data, reportId) {
+      return data.keys().hasAll([
+          'id', 'reporterId', 'reporterName', 'targetType', 'targetId',
+          'mangaId', 'targetLabel', 'reason', 'details', 'status',
+          'resolutionNote', 'resolvedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'reporterId', 'reporterName', 'targetType', 'targetId',
+          'mangaId', 'targetLabel', 'reason', 'details', 'status',
+          'resolutionNote', 'resolvedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == reportId &&
+        isValidId(data.id) &&
+        isValidId(data.reporterId) &&
+        isValidString(data.reporterName, 1, 80) &&
+        data.targetType in ['manga', 'chapter', 'comment', 'user'] &&
+        isValidId(data.targetId) &&
+        isValidString(data.mangaId, 0, 128) &&
+        isValidString(data.targetLabel, 1, 160) &&
+        data.reason in ['copyright', 'explicit_unmarked', 'spam', 'harassment', 'broken_media', 'other'] &&
+        isValidString(data.details, 1, 1000) &&
+        data.status in ['open', 'reviewing', 'resolved', 'dismissed'] &&
+        isValidString(data.resolutionNote, 0, 500) &&
+        isValidString(data.resolvedBy, 0, 128) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationSettings(data, settingsId) {
+      return data.keys().hasAll([
+          'id', 'artistSharePercent', 'platformSharePercent',
+          'minWithdrawalCents', 'updatedBy', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'artistSharePercent', 'platformSharePercent',
+          'minWithdrawalCents', 'updatedBy', 'updatedAt'
+        ]) &&
+        data.id == settingsId &&
+        isValidId(data.id) &&
+        data.artistSharePercent is number && data.artistSharePercent >= 0 && data.artistSharePercent <= 100 &&
+        data.platformSharePercent is number && data.platformSharePercent >= 0 && data.platformSharePercent <= 100 &&
+        data.artistSharePercent + data.platformSharePercent == 100 &&
+        data.minWithdrawalCents is number && data.minWithdrawalCents >= 100 && data.minWithdrawalCents <= 10000000 &&
+        isValidString(data.updatedBy, 0, 128) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationPayoutProfile(data, creatorId) {
+      return data.keys().hasAll([
+          'creatorId', 'beneficiaryName', 'pixKeyType', 'pixKey', 'pixBankName', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'creatorId', 'beneficiaryName', 'pixKeyType', 'pixKey', 'pixBankName', 'updatedAt'
+        ]) &&
+        data.creatorId == creatorId &&
+        isValidId(data.creatorId) &&
+        isValidString(data.beneficiaryName, 1, 120) &&
+        data.pixKeyType in ['cpf', 'cnpj', 'email', 'phone', 'random'] &&
+        isValidString(data.pixKey, 3, 140) &&
+        isValidString(data.pixBankName, 0, 80) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationCreatorBalance(data, creatorId) {
+      return data.keys().hasAll([
+          'creatorId', 'totalEarnedCents', 'pendingCents', 'availableCents',
+          'withdrawalPendingCents', 'totalPaidCents', 'lastOperationId', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'creatorId', 'totalEarnedCents', 'pendingCents', 'availableCents',
+          'withdrawalPendingCents', 'totalPaidCents', 'lastOperationId', 'updatedAt'
+        ]) &&
+        data.creatorId == creatorId &&
+        isValidId(data.creatorId) &&
+        data.totalEarnedCents is number && data.totalEarnedCents >= 0 &&
+        data.pendingCents is number && data.pendingCents >= 0 &&
+        data.availableCents is number && data.availableCents >= 0 &&
+        data.withdrawalPendingCents is number && data.withdrawalPendingCents >= 0 &&
+        data.totalPaidCents is number && data.totalPaidCents >= 0 &&
+        data.totalEarnedCents == (data.pendingCents + data.availableCents + data.withdrawalPendingCents + data.totalPaidCents) &&
+        isValidString(data.lastOperationId, 0, 128) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationRevenue(data, revenueId) {
+      return data.keys().hasAll([
+          'id', 'attributionType', 'mangaId', 'mangaTitle', 'creatorId', 'creatorName',
+          'chapterId', 'chapterNumber', 'referencePeriod', 'adImpressions', 'hasAdImpressions',
+          'grossRevenueCents', 'hasGrossRevenue', 'networkDeductionsCents', 'hasNetworkDeductions',
+          'netRevenueCents', 'artistPercentApplied', 'platformPercentApplied',
+          'artistShareCents', 'platformShareCents', 'releaseBucket', 'source',
+          'externalRef', 'notes', 'confirmationStatus', 'recordedBy',
+          'confirmedBy', 'confirmedAt', 'importedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'attributionType', 'mangaId', 'mangaTitle', 'creatorId', 'creatorName',
+          'chapterId', 'chapterNumber', 'referencePeriod', 'adImpressions', 'hasAdImpressions',
+          'grossRevenueCents', 'hasGrossRevenue', 'networkDeductionsCents', 'hasNetworkDeductions',
+          'netRevenueCents', 'artistPercentApplied', 'platformPercentApplied',
+          'artistShareCents', 'platformShareCents', 'releaseBucket', 'source',
+          'externalRef', 'notes', 'confirmationStatus', 'recordedBy',
+          'confirmedBy', 'confirmedAt', 'importedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == revenueId &&
+        isValidId(data.id) &&
+        data.attributionType in ['work', 'unattributed'] &&
+        isValidString(data.mangaId, 0, 128) &&
+        isValidString(data.mangaTitle, 0, 140) &&
+        isValidString(data.creatorId, 0, 128) &&
+        isValidString(data.creatorName, 0, 80) &&
+        isValidString(data.chapterId, 0, 128) &&
+        data.chapterNumber is number && data.chapterNumber >= 0 &&
+        isValidString(data.referencePeriod, 1, 64) &&
+        data.adImpressions is number && data.adImpressions >= 0 &&
+        data.hasAdImpressions is bool &&
+        data.grossRevenueCents is number && data.grossRevenueCents >= 0 &&
+        data.hasGrossRevenue is bool &&
+        data.networkDeductionsCents is number && data.networkDeductionsCents >= 0 &&
+        data.hasNetworkDeductions is bool &&
+        data.netRevenueCents is number && data.netRevenueCents > 0 &&
+        data.artistPercentApplied is number && data.artistPercentApplied >= 0 && data.artistPercentApplied <= 100 &&
+        data.platformPercentApplied is number && data.platformPercentApplied >= 0 && data.platformPercentApplied <= 100 &&
+        data.artistShareCents is number && data.artistShareCents >= 0 &&
+        data.platformShareCents is number && data.platformShareCents >= 0 &&
+        (data.confirmationStatus != 'confirmed' || (data.artistShareCents + data.platformShareCents == data.netRevenueCents)) &&
+        (data.confirmationStatus != 'pending' || (data.artistShareCents == 0 && data.platformShareCents == 0)) &&
+        data.releaseBucket in ['available', 'pending'] &&
+        isValidString(data.source, 1, 80) &&
+        isValidString(data.externalRef, 0, 120) &&
+        isValidString(data.notes, 0, 500) &&
+        data.confirmationStatus in ['pending', 'confirmed', 'cancelled'] &&
+        isValidId(data.recordedBy) &&
+        isValidString(data.confirmedBy, 0, 128) &&
+        isValidString(data.confirmedAt, 0, 40) &&
+        data.importedAt is timestamp &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationLedgerEntry(data, entryId) {
+      return data.keys().hasAll([
+          'id', 'type', 'creatorId', 'creatorName', 'mangaId', 'mangaTitle',
+          'chapterId', 'amountCents', 'artistPercentApplied', 'platformPercentApplied',
+          'origin', 'status', 'originalEntryId', 'relatedRevenueId',
+          'relatedRequestId', 'relatedPaymentId', 'justification', 'createdBy', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'type', 'creatorId', 'creatorName', 'mangaId', 'mangaTitle',
+          'chapterId', 'amountCents', 'artistPercentApplied', 'platformPercentApplied',
+          'origin', 'status', 'originalEntryId', 'relatedRevenueId',
+          'relatedRequestId', 'relatedPaymentId', 'justification', 'createdBy', 'createdAt'
+        ]) &&
+        data.id == entryId &&
+        isValidId(data.id) &&
+        data.type in ['revenue_credit', 'platform_fee', 'unattributed_revenue', 'pending_release', 'withdrawal_hold', 'withdrawal_release', 'payout_paid', 'adjustment', 'reversal'] &&
+        isValidString(data.creatorId, 0, 128) &&
+        isValidString(data.creatorName, 0, 80) &&
+        isValidString(data.mangaId, 0, 128) &&
+        isValidString(data.mangaTitle, 0, 140) &&
+        isValidString(data.chapterId, 0, 128) &&
+        data.amountCents is number &&
+        data.artistPercentApplied is number && data.artistPercentApplied >= 0 && data.artistPercentApplied <= 100 &&
+        data.platformPercentApplied is number && data.platformPercentApplied >= 0 && data.platformPercentApplied <= 100 &&
+        isValidString(data.origin, 1, 80) &&
+        data.status in ['pending', 'available', 'released', 'completed', 'reversed', 'cancelled'] &&
+        isValidString(data.originalEntryId, 0, 128) &&
+        isValidString(data.relatedRevenueId, 0, 128) &&
+        isValidString(data.relatedRequestId, 0, 128) &&
+        isValidString(data.relatedPaymentId, 0, 128) &&
+        isValidString(data.justification, 0, 500) &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidMonetizationPayoutRequest(data, requestId) {
+      return data.keys().hasAll([
+          'id', 'creatorId', 'creatorName', 'amountCents', 'beneficiaryNameSnapshot',
+          'pixKeyTypeSnapshot', 'pixKeySnapshot', 'pixBankNameSnapshot', 'status',
+          'ledgerEntryId', 'reviewedBy', 'reviewNote', 'reviewedAt', 'paidAt',
+          'paymentId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'creatorId', 'creatorName', 'amountCents', 'beneficiaryNameSnapshot',
+          'pixKeyTypeSnapshot', 'pixKeySnapshot', 'pixBankNameSnapshot', 'status',
+          'ledgerEntryId', 'reviewedBy', 'reviewNote', 'reviewedAt', 'paidAt',
+          'paymentId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == requestId &&
+        isValidId(data.id) &&
+        isValidId(data.creatorId) &&
+        isValidString(data.creatorName, 1, 80) &&
+        data.amountCents is number && data.amountCents >= 100 &&
+        isValidString(data.beneficiaryNameSnapshot, 1, 120) &&
+        data.pixKeyTypeSnapshot in ['cpf', 'cnpj', 'email', 'phone', 'random'] &&
+        isValidString(data.pixKeySnapshot, 3, 140) &&
+        isValidString(data.pixBankNameSnapshot, 0, 80) &&
+        data.status in ['pending', 'approved', 'paid', 'rejected'] &&
+        isValidId(data.ledgerEntryId) &&
+        isValidString(data.reviewedBy, 0, 128) &&
+        isValidString(data.reviewNote, 0, 500) &&
+        isValidString(data.reviewedAt, 0, 40) &&
+        isValidString(data.paidAt, 0, 40) &&
+        isValidString(data.paymentId, 0, 128) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMonetizationPayoutPayment(data, paymentId) {
+      return data.keys().hasAll([
+          'id', 'requestId', 'creatorId', 'creatorName', 'amountPaidCents',
+          'pixKeySnapshot', 'pixKeyTypeSnapshot', 'transactionRef', 'receiptUrl',
+          'notes', 'paidDate', 'paidBy', 'ledgerEntryId', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'requestId', 'creatorId', 'creatorName', 'amountPaidCents',
+          'pixKeySnapshot', 'pixKeyTypeSnapshot', 'transactionRef', 'receiptUrl',
+          'notes', 'paidDate', 'paidBy', 'ledgerEntryId', 'createdAt'
+        ]) &&
+        data.id == paymentId &&
+        isValidId(data.id) &&
+        isValidId(data.requestId) &&
+        isValidId(data.creatorId) &&
+        isValidString(data.creatorName, 1, 80) &&
+        data.amountPaidCents is number && data.amountPaidCents > 0 &&
+        isValidString(data.pixKeySnapshot, 3, 140) &&
+        data.pixKeyTypeSnapshot in ['cpf', 'cnpj', 'email', 'phone', 'random'] &&
+        isValidString(data.transactionRef, 1, 140) &&
+        isValidString(data.receiptUrl, 0, 600) &&
+        isValidString(data.notes, 0, 500) &&
+        isValidString(data.paidDate, 1, 40) &&
+        isValidId(data.paidBy) &&
+        isValidId(data.ledgerEntryId) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidMonetizationIdempotency(data, key) {
+      return data.keys().hasAll(['key', 'action', 'actorId', 'createdAt']) &&
+        data.keys().hasOnly(['key', 'action', 'actorId', 'createdAt']) &&
+        data.key == key &&
+        isValidId(data.key) &&
+        data.action in ['register_revenue', 'confirm_revenue', 'withdrawal', 'pay_payout', 'adjustment'] &&
+        isValidId(data.actorId) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidStimulusSettings(data, settingId) {
+      return data.keys().hasAll(['id', 'enabled', 'minViews', 'maxViews', 'durationHours', 'updatedBy', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'enabled', 'minViews', 'maxViews', 'durationHours', 'updatedBy', 'updatedAt']) &&
+        data.id == settingId &&
+        data.enabled is bool &&
+        data.minViews is number && data.minViews >= 1 && data.minViews <= 1000 &&
+        data.maxViews is number && data.maxViews >= data.minViews && data.maxViews <= 1000 &&
+        data.durationHours is number && data.durationHours >= 1 && data.durationHours <= 168 &&
+        isValidId(data.updatedBy) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMangaWishlist(data, mangaId, userId) {
+      return data.keys().hasAll(['userId', 'mangaId', 'authorId', 'addedDuringPreLaunch', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'mangaId', 'authorId', 'addedDuringPreLaunch', 'createdAt']) &&
+        data.userId == userId &&
+        data.mangaId == mangaId &&
+        isValidId(data.userId) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.authorId) &&
+        data.addedDuringPreLaunch is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidMangaPreview(data, previewKey) {
+      return data.keys().hasAll([
+          'previewKey', 'previewSlug', 'mangaId', 'authorName', 'title', 'synopsis',
+          'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status', 'hasMotion',
+          'chaptersCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'isActive', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'previewKey', 'previewSlug', 'mangaId', 'authorName', 'title', 'synopsis',
+          'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status', 'hasMotion',
+          'chaptersCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'isActive', 'createdAt', 'updatedAt'
+        ]) &&
+        data.previewKey == previewKey &&
+        isValidId(data.previewKey) &&
+        isValidString(data.previewSlug, 1, 80) &&
+        data.previewSlug.matches('^[a-z0-9\\-]+$') &&
+        isValidId(data.mangaId) &&
+        isValidString(data.authorName, 1, 80) &&
+        isValidString(data.title, 1, 140) &&
+        isValidString(data.synopsis, 1, 3000) &&
+        isValidString(data.coverUrl, 0, 600) &&
+        isValidString(data.bannerUrl, 0, 600) &&
+        data.genres is list && data.genres.size() >= 1 && data.genres.size() <= 6 &&
+        data.genres[0] is string && data.genres[0].size() >= 1 && data.genres[0].size() <= 40 &&
+        data.ageRating in ['Livre', '12+', '14+', '16+', '18+'] &&
+        data.status in ['draft', 'pre_launch', 'ongoing', 'completed', 'hiatus', 'archived'] &&
+        data.hasMotion is bool &&
+        data.chaptersCount is number && data.chaptersCount >= 0 &&
+        data.favoritesCount is number && data.favoritesCount >= 0 &&
+        data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5 &&
+        data.ratingCount is number && data.ratingCount >= 0 &&
+        data.isActive is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMangaPreviewChapter(data, previewKey, chapterId) {
+      return data.keys().hasAll([
+          'id', 'mangaId', 'previewKey', 'chapterNumber', 'title', 'status',
+          'hasMotion', 'pagesCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'mangaId', 'previewKey', 'chapterNumber', 'title', 'status',
+          'hasMotion', 'pagesCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == chapterId &&
+        data.previewKey == previewKey &&
+        isValidId(data.id) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.previewKey) &&
+        data.chapterNumber is number && data.chapterNumber >= 0 && data.chapterNumber <= 10000 &&
+        isValidString(data.title, 1, 140) &&
+        data.status in ['draft', 'published'] &&
+        data.hasMotion is bool &&
+        data.pagesCount is number && data.pagesCount >= 0 && data.pagesCount <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMangaPreviewPage(data, previewKey, chapterId, pageId) {
+      return data.keys().hasAll([
+          'id', 'mangaId', 'chapterId', 'previewKey', 'pageNumber',
+          'originalUrl', 'originalMime', 'motionUrl', 'motionMime',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'mangaId', 'chapterId', 'previewKey', 'pageNumber',
+          'originalUrl', 'originalMime', 'motionUrl', 'motionMime',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == pageId &&
+        data.chapterId == chapterId &&
+        data.previewKey == previewKey &&
+        isValidId(data.id) &&
+        isValidId(data.mangaId) &&
+        isValidId(data.chapterId) &&
+        isValidId(data.previewKey) &&
+        data.pageNumber is number && data.pageNumber >= 1 && data.pageNumber <= 500 &&
+        isValidString(data.originalUrl, 1, 600) &&
+        isValidString(data.originalMime, 1, 80) &&
+        isValidString(data.motionUrl, 0, 600) &&
+        isValidString(data.motionMime, 0, 80) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isAdmin() && isValidAdminDoc(incoming(), userId) && incoming().grantedAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if resource.data.isSuspended == false || isAdmin();
+      allow create: if isValidId(userId) && isVerified() && isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().isSuspended == false &&
+        incoming().followersCount == 0 &&
+        incoming().worksCount == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerified() && isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(userId) && existing().isSuspended == false &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'avatarUrl', 'bio', 'accountType', 'worksCount', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'updatedAt']))
+        );
+      allow delete: if isValidId(userId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow list: if isOwner(userId) || isAdmin();
+        allow create: if isValidId(userId) && docId == 'info' && isVerified() && isOwner(userId) &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && docId == 'info' && isVerified() && (isOwner(userId) || isAdmin()) &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'preferredMode', 'nightMode', 'layoutMode', 'fitMode',
+            'nightTheme', 'brightness', 'zoom', 'email', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(docId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
+      }
+
+      match /favorites/{mangaId} {
+        allow get: if isValidId(userId) && isValidId(mangaId) && (isOwner(userId) || isAdmin());
+        allow list: if isOwner(userId) || isAdmin();
+        allow create: if isValidId(userId) && isValidId(mangaId) && isVerified() && isOwner(userId) &&
+          isValidFavorite(incoming(), userId, mangaId) &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(mangaId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
+      }
+
+      match /history/{mangaId} {
+        allow get: if isValidId(userId) && isValidId(mangaId) && (isOwner(userId) || isAdmin());
+        allow list: if isOwner(userId) || isAdmin();
+        allow create: if isValidId(userId) && isValidId(mangaId) && isVerified() && isOwner(userId) &&
+          isValidHistory(incoming(), userId, mangaId) &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(mangaId) && isVerified() && isOwner(userId) &&
+          isValidHistory(incoming(), userId, mangaId) &&
+          incoming().userId == existing().userId &&
+          incoming().mangaId == existing().mangaId &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['chapterId', 'chapterNumber', 'chapterTitle', 'pageNumber', 'totalPages', 'preferredMode', 'mangaTitle', 'coverUrl', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(mangaId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    match /mangas/{mangaId} {
+      allow get: if isValidId(mangaId) && (
+        resource == null ||
+        (existing().status != 'draft' && existing().moderationStatus == 'approved') ||
+        isOwner(existing().authorId) ||
+        isAdmin()
+      );
+      allow list: if (resource.data.status != 'draft' && resource.data.moderationStatus == 'approved') ||
+        (isSignedIn() && resource.data.authorId == request.auth.uid) ||
+        isAdmin();
+      allow create: if isValidId(mangaId) && isVerified() &&
+        isValidManga(incoming(), mangaId) &&
+        incoming().authorId == request.auth.uid &&
+        incoming().moderationStatus == 'approved' &&
+        incoming().isFeatured == false &&
+        incoming().viewsCount == 0 &&
+        incoming().favoritesCount == 0 &&
+        incoming().ratingAverage == 0 &&
+        incoming().ratingCount == 0 &&
+        !('launchedAt' in incoming()) &&
+        (!('launchedFromPreLaunch' in incoming()) || incoming().launchedFromPreLaunch == false) &&
+        (!('stimulusSettledViews' in incoming()) || incoming().stimulusSettledViews == 0) &&
+        (!('stimulusWindows' in incoming()) || incoming().stimulusWindows.size() == 0) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuspended == false;
+      allow update: if isValidId(mangaId) && isVerified() &&
+        isValidManga(incoming(), mangaId) &&
+        incoming().id == existing().id &&
+        incoming().authorId == existing().authorId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(existing().authorId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'authorName', 'title', 'slug', 'synopsis', 'coverUrl', 'bannerUrl',
+              'genres', 'ageRating', 'status', 'hasMotion', 'chaptersCount',
+              'stimulusSettledViews', 'stimulusWindows',
+              'launchedAt', 'launchedFromPreLaunch',
+              'previewEnabled', 'previewSlug', 'previewToken', 'previewKey',
+              'updatedAt'
+            ]) &&
+            (!('launchedAt' in incoming()) || incoming().launchedAt == request.time ||
+              (('launchedAt' in existing()) && incoming().launchedAt == existing().launchedAt)) &&
+            (!('stimulusSettledViews' in incoming()) || (
+              incoming().stimulusSettledViews >= (!('stimulusSettledViews' in existing()) ? 0 : existing().stimulusSettledViews) &&
+              incoming().stimulusSettledViews <= (!('stimulusSettledViews' in existing()) ? 0 : existing().stimulusSettledViews) + 10000
+            ))) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt']) &&
+            incoming().viewsCount == existing().viewsCount + 1) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['favoritesCount', 'updatedAt']) &&
+            (incoming().favoritesCount == existing().favoritesCount + 1 ||
+             incoming().favoritesCount == existing().favoritesCount - 1)) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt']))
+        );
+      allow delete: if isValidId(mangaId) && isVerified() && resource != null && (isOwner(existing().authorId) || isAdmin());
+
+      match /ratings/{userId} {
+        allow get: if isValidId(mangaId) && isValidId(userId);
+        allow list: if resource.data.score >= 1;
+        allow create: if isValidId(mangaId) && isValidId(userId) && isVerified() && isOwner(userId) &&
+          isValidRating(incoming(), mangaId, userId) &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isValidId(mangaId) && isValidId(userId) && isVerified() && isOwner(userId) &&
+          isValidRating(incoming(), mangaId, userId) &&
+          incoming().userId == existing().userId &&
+          incoming().mangaId == existing().mangaId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['score', 'review', 'userName', 'updatedAt']);
+        allow delete: if isValidId(mangaId) && isValidId(userId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
+      }
+
+      match /readers/{userId} {
+        allow get: if isValidId(mangaId) && isValidId(userId) && (
+          resource == null ||
+          isOwner(userId) ||
+          isOwner(existing().authorId) ||
+          isAdmin()
+        );
+        allow list: if isSignedIn() && (
+          resource.data.authorId == request.auth.uid ||
+          resource.data.userId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isValidId(mangaId) && isValidId(userId) && isVerified() && isOwner(userId) &&
+          isValidMangaReader(incoming(), mangaId, userId) &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          incoming().authorId == get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId;
+        allow update: if isValidId(mangaId) && isValidId(userId) && isVerified() && isOwner(userId) &&
+          isValidMangaReader(incoming(), mangaId, userId) &&
+          incoming().userId == existing().userId &&
+          incoming().mangaId == existing().mangaId &&
+          incoming().authorId == existing().authorId &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt']);
+        allow delete: if isValidId(mangaId) && isValidId(userId) && isVerified() && resource != null && (
+          isOwner(userId) ||
+          isOwner(existing().authorId) ||
+          isAdmin()
+        );
+      }
+
+      match /wishlist/{userId} {
+        allow get: if isValidId(mangaId) && isValidId(userId) && (
+          resource == null ||
+          isOwner(userId) ||
+          isOwner(existing().authorId) ||
+          isAdmin()
+        );
+        allow list: if isSignedIn() && (
+          resource.data.authorId == request.auth.uid ||
+          resource.data.userId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isValidId(mangaId) && isValidId(userId) && isVerified() && isOwner(userId) &&
+          isValidMangaWishlist(incoming(), mangaId, userId) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          incoming().authorId == get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId;
+        allow update: if false;
+        allow delete: if isValidId(mangaId) && isValidId(userId) && isVerified() && resource != null && (
+          isOwner(userId) ||
+          isOwner(existing().authorId) ||
+          isAdmin()
+        );
+      }
+
+      match /chapters/{chapterId} {
+        allow get: if isValidId(mangaId) && isValidId(chapterId) && (
+          resource == null ||
+          existing().status == 'published' ||
+          isOwner(existing().authorId) ||
+          isAdmin()
+        );
+        allow list: if resource.data.status == 'published' ||
+          (isSignedIn() && resource.data.authorId == request.auth.uid) ||
+          isAdmin();
+        allow create: if isValidId(mangaId) && isValidId(chapterId) && isVerified() &&
+          isValidChapter(incoming(), mangaId, chapterId) &&
+          incoming().authorId == request.auth.uid &&
+          incoming().viewsCount == 0 &&
+          !('firstPublishedAt' in incoming()) &&
+          !('stimulusBudget' in incoming()) &&
+          !('stimulusSeed' in incoming()) &&
+          !('stimulusDurationHours' in incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+          get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid;
+        allow update: if isValidId(mangaId) && isValidId(chapterId) && isVerified() &&
+          isValidChapter(incoming(), mangaId, chapterId) &&
+          incoming().id == existing().id &&
+          incoming().mangaId == existing().mangaId &&
+          incoming().authorId == existing().authorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (isOwner(existing().authorId) &&
+              get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid && (
+                incoming().diff(existing()).affectedKeys().hasOnly(['chapterNumber', 'title', 'status', 'hasMotion', 'pagesCount', 'updatedAt']) ||
+                (!('firstPublishedAt' in existing()) &&
+                  incoming().status == 'published' &&
+                  incoming().pagesCount >= 1 &&
+                  (!('firstPublishedAt' in incoming()) || incoming().firstPublishedAt == request.time) &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'chapterNumber', 'title', 'status', 'hasMotion', 'pagesCount',
+                    'firstPublishedAt', 'stimulusBudget', 'stimulusSeed', 'stimulusDurationHours', 'updatedAt'
+                  ]))
+              )) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt']) &&
+              incoming().viewsCount == existing().viewsCount + 1)
+          );
+        allow delete: if isValidId(mangaId) && isValidId(chapterId) && isVerified() && resource != null && (
+          (isOwner(existing().authorId) &&
+            exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+            get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid) ||
+          isAdmin()
+        );
+
+        match /pages/{pageId} {
+          allow get: if isValidId(mangaId) && isValidId(chapterId) && isValidId(pageId) && (
+            resource == null ||
+            existing().chapterStatus == 'published' ||
+            isOwner(existing().authorId) ||
+            isAdmin()
+          );
+          allow list: if resource.data.chapterStatus == 'published' ||
+            (isSignedIn() && resource.data.authorId == request.auth.uid) ||
+            isAdmin();
+          allow create: if isValidId(mangaId) && isValidId(chapterId) && isValidId(pageId) && isVerified() &&
+            isValidPage(incoming(), mangaId, chapterId, pageId) &&
+            incoming().authorId == request.auth.uid &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time &&
+            exists(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId)) &&
+            get(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId)).data.authorId == request.auth.uid;
+          allow update: if isValidId(mangaId) && isValidId(chapterId) && isValidId(pageId) && isVerified() &&
+            isValidPage(incoming(), mangaId, chapterId, pageId) &&
+            incoming().id == existing().id &&
+            incoming().mangaId == existing().mangaId &&
+            incoming().chapterId == existing().chapterId &&
+            incoming().authorId == existing().authorId &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time && (
+              isAdmin() ||
+              (isOwner(existing().authorId) &&
+                get(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId)).data.authorId == request.auth.uid &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['chapterStatus', 'pageNumber', 'originalUrl', 'originalMime', 'motionUrl', 'motionMime', 'updatedAt']))
+            );
+          allow delete: if isValidId(mangaId) && isValidId(chapterId) && isValidId(pageId) && isVerified() && resource != null && (
+            (isOwner(existing().authorId) &&
+              exists(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId)) &&
+              get(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId)).data.authorId == request.auth.uid) ||
+            isAdmin()
+          );
+        }
+
+        match /comments/{commentId} {
+          allow get: if isValidId(mangaId) && isValidId(chapterId) && isValidId(commentId) && (
+            resource == null ||
+            existing().isHidden == false ||
+            isOwner(existing().userId) ||
+            (isSignedIn() && exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid) ||
+            isAdmin()
+          );
+          allow list: if resource.data.isHidden == false ||
+            (isSignedIn() && resource.data.userId == request.auth.uid) ||
+            (isSignedIn() && exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid) ||
+            isAdmin();
+          allow create: if isValidId(mangaId) && isValidId(chapterId) && isValidId(commentId) && isVerified() &&
+            isValidComment(incoming(), mangaId, chapterId, commentId) &&
+            incoming().userId == request.auth.uid &&
+            incoming().isHidden == false &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time &&
+            exists(/databases/$(database)/documents/mangas/$(mangaId)/chapters/$(chapterId));
+          allow update: if isValidId(mangaId) && isValidId(chapterId) && isValidId(commentId) && isVerified() &&
+            isValidComment(incoming(), mangaId, chapterId, commentId) &&
+            incoming().id == existing().id &&
+            incoming().mangaId == existing().mangaId &&
+            incoming().chapterId == existing().chapterId &&
+            incoming().userId == existing().userId &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time && (
+              isAdmin() ||
+              (isOwner(existing().userId) && existing().isHidden == false &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt'])) ||
+              (exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+                get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['isHidden', 'updatedAt']))
+            );
+          allow delete: if isValidId(mangaId) && isValidId(chapterId) && isValidId(commentId) && isVerified() && resource != null && (
+            isOwner(existing().userId) ||
+            (exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(mangaId)).data.authorId == request.auth.uid) ||
+            isAdmin()
+          );
+        }
+      }
+    }
+
+    match /follows/{followId} {
+      allow get: if isValidFollowId(followId);
+      allow list: if resource.data.followerId is string;
+      allow create: if isValidFollowId(followId) && isVerified() &&
+        isValidFollow(incoming(), followId) &&
+        incoming().followerId == request.auth.uid &&
+        followId == (request.auth.uid + '_' + incoming().authorId) &&
+        exists(/databases/$(database)/documents/users/$(incoming().authorId)) &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidFollowId(followId) && isVerified() && resource != null && (
+        isOwner(existing().followerId) || isOwner(existing().authorId) || isAdmin()
+      );
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (resource == null || isOwner(existing().recipientId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.recipientId == request.auth.uid || isAdmin());
+      allow create: if isValidId(notificationId) && isVerified() &&
+        isValidNotification(incoming(), notificationId) &&
+        incoming().actorId == request.auth.uid &&
+        incoming().isRead == false &&
+        incoming().createdAt == request.time;
+      allow update: if isValidId(notificationId) && isVerified() && (isOwner(existing().recipientId) || isAdmin()) &&
+        isValidNotification(incoming(), notificationId) &&
+        incoming().id == existing().id &&
+        incoming().recipientId == existing().recipientId &&
+        incoming().actorId == existing().actorId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+      allow delete: if isValidId(notificationId) && isVerified() && resource != null && (isOwner(existing().recipientId) || isAdmin());
+    }
+
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && (isOwner(existing().reporterId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.reporterId == request.auth.uid || isAdmin());
+      allow create: if isValidId(reportId) && isVerified() &&
+        isValidReport(incoming(), reportId) &&
+        incoming().reporterId == request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().resolutionNote == '' &&
+        incoming().resolvedBy == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(reportId) && isAdmin() &&
+        isValidReport(incoming(), reportId) &&
+        incoming().id == existing().id &&
+        incoming().reporterId == existing().reporterId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().status in ['open', 'reviewing'] &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'resolvedBy', 'updatedAt']);
+      allow delete: if isValidId(reportId) && isAdmin();
+    }
+
+    match /monetization_settings/{settingsId} {
+      allow get: if isValidId(settingsId) && isVerified();
+      allow list: if isAdmin();
+      allow create: if settingsId == 'global' && isAdmin() &&
+        isValidMonetizationSettings(incoming(), settingsId) &&
+        incoming().updatedAt == request.time;
+      allow update: if settingsId == 'global' && isAdmin() &&
+        isValidMonetizationSettings(incoming(), settingsId) &&
+        incoming().id == existing().id &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /monetization_payout_profiles/{creatorId} {
+      allow get: if isValidId(creatorId) && isVerified() && (isOwner(creatorId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(creatorId) && isVerified() && (isOwner(creatorId) || isAdmin()) &&
+        isValidMonetizationPayoutProfile(incoming(), creatorId) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(creatorId) && isVerified() && (isOwner(creatorId) || isAdmin()) &&
+        isValidMonetizationPayoutProfile(incoming(), creatorId) &&
+        incoming().creatorId == existing().creatorId &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /monetization_creator_balances/{creatorId} {
+      allow get: if isValidId(creatorId) && isVerified() && (isOwner(creatorId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(creatorId) && isAdmin() &&
+        isValidMonetizationCreatorBalance(incoming(), creatorId) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(creatorId) && isVerified() &&
+        isValidMonetizationCreatorBalance(incoming(), creatorId) &&
+        incoming().creatorId == existing().creatorId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(creatorId) &&
+            incoming().totalEarnedCents == existing().totalEarnedCents &&
+            incoming().pendingCents == existing().pendingCents &&
+            incoming().totalPaidCents == existing().totalPaidCents &&
+            incoming().availableCents < existing().availableCents &&
+            incoming().withdrawalPendingCents > existing().withdrawalPendingCents &&
+            (incoming().availableCents + incoming().withdrawalPendingCents) == (existing().availableCents + existing().withdrawalPendingCents) &&
+            incoming().lastOperationId.size() > 0 &&
+            existsAfter(/databases/$(database)/documents/monetization_payout_requests/$(incoming().lastOperationId)) &&
+            getAfter(/databases/$(database)/documents/monetization_payout_requests/$(incoming().lastOperationId)).data.creatorId == creatorId &&
+            getAfter(/databases/$(database)/documents/monetization_payout_requests/$(incoming().lastOperationId)).data.amountCents == (existing().availableCents - incoming().availableCents) &&
+            getAfter(/databases/$(database)/documents/monetization_payout_requests/$(incoming().lastOperationId)).data.status == 'pending')
+        );
+      allow delete: if false;
+    }
+
+    match /monetization_revenues/{revenueId} {
+      allow get: if isValidId(revenueId) && isVerified() && (resource == null || isAdmin() || existing().creatorId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.creatorId == request.auth.uid);
+      allow create: if isValidId(revenueId) && isAdmin() &&
+        isValidMonetizationRevenue(incoming(), revenueId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(revenueId) && isAdmin() &&
+        isValidMonetizationRevenue(incoming(), revenueId) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().confirmationStatus == 'pending';
+      allow delete: if false;
+    }
+
+    match /monetization_ledger/{entryId} {
+      allow get: if isValidId(entryId) && isVerified() && (resource == null || isAdmin() || existing().creatorId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.creatorId == request.auth.uid);
+      allow create: if isValidId(entryId) && isVerified() &&
+        isValidMonetizationLedgerEntry(incoming(), entryId) &&
+        incoming().createdAt == request.time && (
+          isAdmin() ||
+          (incoming().type == 'withdrawal_hold' &&
+            incoming().creatorId == request.auth.uid &&
+            incoming().createdBy == request.auth.uid &&
+            incoming().amountCents < 0 &&
+            incoming().relatedRequestId.size() > 0 &&
+            existsAfter(/databases/$(database)/documents/monetization_payout_requests/$(incoming().relatedRequestId)))
+        );
+      allow update: if isValidId(entryId) && isAdmin() &&
+        isValidMonetizationLedgerEntry(incoming(), entryId) &&
+        incoming().id == existing().id &&
+        incoming().type == existing().type &&
+        incoming().creatorId == existing().creatorId &&
+        incoming().amountCents == existing().amountCents &&
+        incoming().artistPercentApplied == existing().artistPercentApplied &&
+        incoming().platformPercentApplied == existing().platformPercentApplied &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+        ((existing().status == 'pending' && incoming().status in ['released', 'reversed']) ||
+         (existing().status in ['available', 'released', 'completed'] && incoming().status == 'reversed'));
+      allow delete: if false;
+    }
+
+    match /monetization_payout_requests/{requestId} {
+      allow get: if isValidId(requestId) && isVerified() && (resource == null || isAdmin() || existing().creatorId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.creatorId == request.auth.uid);
+      allow create: if isValidId(requestId) && isVerified() &&
+        isValidMonetizationPayoutRequest(incoming(), requestId) &&
+        incoming().creatorId == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().reviewedBy == '' &&
+        incoming().paymentId == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        existsAfter(/databases/$(database)/documents/monetization_creator_balances/$(request.auth.uid)) &&
+        getAfter(/databases/$(database)/documents/monetization_creator_balances/$(request.auth.uid)).data.lastOperationId == requestId;
+      allow update: if isValidId(requestId) && isAdmin() &&
+        isValidMonetizationPayoutRequest(incoming(), requestId) &&
+        incoming().id == existing().id &&
+        incoming().creatorId == existing().creatorId &&
+        incoming().amountCents == existing().amountCents &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().status in ['pending', 'approved'] &&
+        ((existing().status == 'pending' && incoming().status in ['approved', 'rejected']) ||
+         (existing().status == 'approved' && incoming().status in ['paid', 'rejected']));
+      allow delete: if false;
+    }
+
+    match /monetization_payout_payments/{paymentId} {
+      allow get: if isValidId(paymentId) && isVerified() && (resource == null || isAdmin() || existing().creatorId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.creatorId == request.auth.uid);
+      allow create: if isValidId(paymentId) && isAdmin() &&
+        isValidMonetizationPayoutPayment(incoming(), paymentId) &&
+        incoming().paidBy == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /monetization_idempotency/{key} {
+      allow get: if isValidId(key) && isVerified() && (resource == null || isAdmin() || existing().actorId == request.auth.uid);
+      allow list: if isAdmin();
+      allow create: if isValidId(key) && isVerified() &&
+        isValidMonetizationIdempotency(incoming(), key) &&
+        incoming().actorId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        (isAdmin() || incoming().action == 'withdrawal');
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /app_settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'stimulus';
+      allow list: if isAdmin();
+      allow create: if settingId == 'stimulus' && isAdmin() &&
+        isValidStimulusSettings(incoming(), settingId) &&
+        incoming().updatedAt == request.time;
+      allow update: if settingId == 'stimulus' && isAdmin() &&
+        isValidStimulusSettings(incoming(), settingId) &&
+        incoming().id == existing().id &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /manga_previews/{previewKey} {
+      allow get: if isValidId(previewKey);
+      allow list: if isAdmin();
+      allow create: if isValidId(previewKey) && isVerified() &&
+        isValidMangaPreview(incoming(), previewKey) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        existsAfter(/databases/$(database)/documents/mangas/$(incoming().mangaId)) &&
+        getAfter(/databases/$(database)/documents/mangas/$(incoming().mangaId)).data.authorId == request.auth.uid;
+      allow update: if isValidId(previewKey) && isVerified() &&
+        isValidMangaPreview(incoming(), previewKey) &&
+        incoming().previewKey == existing().previewKey &&
+        incoming().mangaId == existing().mangaId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+            get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['favoritesCount', 'updatedAt']) &&
+            (incoming().favoritesCount == existing().favoritesCount + 1 ||
+             incoming().favoritesCount == existing().favoritesCount - 1))
+        );
+      allow delete: if isValidId(previewKey) && isVerified() && resource != null && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+          get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
+      );
+
+      match /chapters/{chapterId} {
+        allow get: if isValidId(previewKey) && isValidId(chapterId);
+        allow list: if resource.data.previewKey == previewKey;
+        allow create: if isValidId(previewKey) && isValidId(chapterId) && isVerified() &&
+          isValidMangaPreviewChapter(incoming(), previewKey, chapterId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (exists(/databases/$(database)/documents/mangas/$(incoming().mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(incoming().mangaId)).data.authorId == request.auth.uid)
+          );
+        allow update: if isValidId(previewKey) && isValidId(chapterId) && isVerified() &&
+          isValidMangaPreviewChapter(incoming(), previewKey, chapterId) &&
+          incoming().id == existing().id &&
+          incoming().mangaId == existing().mangaId &&
+          incoming().previewKey == existing().previewKey &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            isAdmin() ||
+            (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
+          );
+        allow delete: if isValidId(previewKey) && isValidId(chapterId) && isVerified() && resource != null && (
+          isAdmin() ||
+          (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+            get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
+        );
+
+        match /pages/{pageId} {
+          allow get: if isValidId(previewKey) && isValidId(chapterId) && isValidId(pageId);
+          allow list: if resource.data.chapterId == chapterId;
+          allow create: if isValidId(previewKey) && isValidId(chapterId) && isValidId(pageId) && isVerified() &&
+            isValidMangaPreviewPage(incoming(), previewKey, chapterId, pageId) &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time && (
+              isAdmin() ||
+              (exists(/databases/$(database)/documents/mangas/$(incoming().mangaId)) &&
+                get(/databases/$(database)/documents/mangas/$(incoming().mangaId)).data.authorId == request.auth.uid)
+            );
+          allow update: if isValidId(previewKey) && isValidId(chapterId) && isValidId(pageId) && isVerified() &&
+            isValidMangaPreviewPage(incoming(), previewKey, chapterId, pageId) &&
+            incoming().id == existing().id &&
+            incoming().mangaId == existing().mangaId &&
+            incoming().chapterId == existing().chapterId &&
+            incoming().previewKey == existing().previewKey &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time && (
+              isAdmin() ||
+              (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+                get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
+            );
+          allow delete: if isValidId(previewKey) && isValidId(chapterId) && isValidId(pageId) && isVerified() && resource != null && (
+            isAdmin() ||
+            (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
+              get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
+          );
+        }
+      }
+    }
+  }
+}

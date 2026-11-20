@@ -1,0 +1,6 @@
+{
+  "name": "MANGA MOTION",
+  "description": "Plataforma profissional de publicação, armazenamento e leitura de mangás tradicionais e Motion Manga.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,652 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public profile for readers and creators (no PII stored here).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "handle": { "type": "string", "minLength": 2, "maxLength": 40, "pattern": "^[a-zA-Z0-9_.\\-]+$" },
+        "avatarUrl": { "type": "string", "maxLength": 600 },
+        "bio": { "type": "string", "maxLength": 400 },
+        "accountType": { "type": "string", "enum": ["reader", "creator"] },
+        "followersCount": { "type": "number" },
+        "worksCount": { "type": "number" },
+        "isSuspended": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "handle", "avatarUrl", "bio", "accountType", "followersCount", "worksCount", "isSuspended", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Private PII and reader preferences isolated under user subcollection.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 160 },
+        "preferredMode": { "type": "string", "enum": ["original", "motion"] },
+        "nightMode": { "type": "boolean" },
+        "layoutMode": { "type": "string", "enum": ["single", "vertical"] },
+        "fitMode": { "type": "string", "enum": ["fit-width", "fit-height", "actual"] },
+        "nightTheme": { "type": "string", "enum": ["oled", "slate", "warm-dark"] },
+        "brightness": { "type": "number" },
+        "zoom": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "preferredMode", "nightMode", "createdAt", "updatedAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted platform administrator marker document.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "grantedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "grantedAt"]
+    },
+    "Manga": {
+      "title": "Manga",
+      "description": "Published or draft manga series with metadata and metrics.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "slug": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "synopsis": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "coverUrl": { "type": "string", "maxLength": 600 },
+        "bannerUrl": { "type": "string", "maxLength": 600 },
+        "genres": { "type": "array" },
+        "ageRating": { "type": "string", "enum": ["Livre", "12+", "14+", "16+", "18+"] },
+        "status": { "type": "string", "enum": ["draft", "pre_launch", "ongoing", "completed", "hiatus", "archived"] },
+        "moderationStatus": { "type": "string", "enum": ["approved", "pending", "flagged", "removed"] },
+        "isFeatured": { "type": "boolean" },
+        "hasMotion": { "type": "boolean" },
+        "chaptersCount": { "type": "number" },
+        "viewsCount": { "type": "number" },
+        "favoritesCount": { "type": "number" },
+        "ratingAverage": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "stimulusSettledViews": { "type": "number" },
+        "stimulusWindows": { "type": "array" },
+        "realViewsDayKey": { "type": "string", "maxLength": 12 },
+        "realViewsTodayCount": { "type": "number" },
+        "realViewsPrevDayKey": { "type": "string", "maxLength": 12 },
+        "realViewsPrevDayCount": { "type": "number" },
+        "realFavsDayKey": { "type": "string", "maxLength": 12 },
+        "realFavsTodayCount": { "type": "number" },
+        "realFavsPrevDayKey": { "type": "string", "maxLength": 12 },
+        "realFavsPrevDayCount": { "type": "number" },
+        "lastChapterPublishedAt": { "type": "string", "format": "date-time" },
+        "launchedAt": { "type": "string", "format": "date-time" },
+        "launchedFromPreLaunch": { "type": "boolean" },
+        "previewEnabled": { "type": "boolean" },
+        "previewSlug": { "type": "string", "maxLength": 80 },
+        "previewToken": { "type": "string", "maxLength": 40 },
+        "previewKey": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "authorId", "authorName", "title", "slug", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "moderationStatus", "isFeatured", "hasMotion", "chaptersCount", "viewsCount", "favoritesCount", "ratingAverage", "ratingCount", "createdAt", "updatedAt"]
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "Isolated chapter belonging to a single manga.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterNumber": { "type": "number" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "hasMotion": { "type": "boolean" },
+        "pagesCount": { "type": "number" },
+        "viewsCount": { "type": "number" },
+        "firstPublishedAt": { "type": "string", "format": "date-time" },
+        "stimulusBudget": { "type": "number" },
+        "stimulusSeed": { "type": "number" },
+        "stimulusDurationHours": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mangaId", "authorId", "chapterNumber", "title", "status", "hasMotion", "pagesCount", "viewsCount", "createdAt", "updatedAt"]
+    },
+    "Page": {
+      "title": "Page",
+      "description": "Single page inside a chapter linking original image and optional Motion asset.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterStatus": { "type": "string", "enum": ["draft", "published"] },
+        "pageNumber": { "type": "number" },
+        "originalUrl": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "originalMime": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "motionUrl": { "type": "string", "maxLength": 600 },
+        "motionMime": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mangaId", "chapterId", "authorId", "chapterStatus", "pageNumber", "originalUrl", "originalMime", "motionUrl", "motionMime", "createdAt", "updatedAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Reader comment on a specific chapter.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "userAvatar": { "type": "string", "maxLength": 600 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "parentId": { "type": "string", "maxLength": 128 },
+        "replyToUserId": { "type": "string", "maxLength": 128 },
+        "replyToUserName": { "type": "string", "maxLength": 80 },
+        "isAuthorReply": { "type": "boolean" },
+        "isHidden": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mangaId", "chapterId", "userId", "userName", "userAvatar", "content", "isHidden", "createdAt", "updatedAt"]
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "User rating and optional review for a manga.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "score": { "type": "number" },
+        "review": { "type": "string", "maxLength": 600 },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mangaId", "score", "review", "userName", "createdAt", "updatedAt"]
+    },
+    "Favorite": {
+      "title": "Favorite",
+      "description": "User bookmarked/favorite manga.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaTitle": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "coverUrl": { "type": "string", "maxLength": 600 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "addedDuringPreLaunch": { "type": "boolean" },
+        "previewKey": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mangaId", "mangaTitle", "coverUrl", "authorName", "createdAt"]
+    },
+    "ReadingHistory": {
+      "title": "ReadingHistory",
+      "description": "Automatic resume-reading progress per manga for a user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaTitle": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "coverUrl": { "type": "string", "maxLength": 600 },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterNumber": { "type": "number" },
+        "chapterTitle": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "pageNumber": { "type": "number" },
+        "totalPages": { "type": "number" },
+        "preferredMode": { "type": "string", "enum": ["original", "motion"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mangaId", "mangaTitle", "coverUrl", "chapterId", "chapterNumber", "chapterTitle", "pageNumber", "totalPages", "preferredMode", "updatedAt"]
+    },
+    "Follow": {
+      "title": "Follow",
+      "description": "Reader following an author/creator.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 260, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "followerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "followerId", "authorId", "authorName", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app notification for new chapters, followers, comments, or moderation actions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["new_chapter", "pre_launch_release", "new_comment", "new_follower", "moderation", "manga_deleted", "account_removed", "monetization"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "linkMangaId": { "type": "string", "maxLength": 128 },
+        "linkChapterId": { "type": "string", "maxLength": 128 },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "recipientId", "actorId", "actorName", "type", "title", "message", "linkMangaId", "linkChapterId", "isRead", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "User-submitted report for content moderation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "targetType": { "type": "string", "enum": ["manga", "chapter", "comment", "user"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "maxLength": 128 },
+        "targetLabel": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "reason": { "type": "string", "enum": ["copyright", "explicit_unmarked", "spam", "harassment", "broken_media", "other"] },
+        "details": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["open", "reviewing", "resolved", "dismissed"] },
+        "resolutionNote": { "type": "string", "maxLength": 500 },
+        "resolvedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reporterId", "reporterName", "targetType", "targetId", "mangaId", "targetLabel", "reason", "details", "status", "resolutionNote", "resolvedBy", "createdAt", "updatedAt"]
+    },
+    "MangaReader": {
+      "title": "MangaReader",
+      "description": "Tracks readers who have this manga in Continue Reading so they can be notified if the author deletes the work.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mangaId", "authorId", "updatedAt"]
+    },
+    "MonetizationSettings": {
+      "title": "MonetizationSettings",
+      "description": "Global platform split policy (default 70/30) and minimum withdrawal threshold.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "artistSharePercent": { "type": "number" },
+        "platformSharePercent": { "type": "number" },
+        "minWithdrawalCents": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "artistSharePercent", "platformSharePercent", "minWithdrawalCents", "updatedBy", "updatedAt"]
+    },
+    "MonetizationPayoutProfile": {
+      "title": "MonetizationPayoutProfile",
+      "description": "Creator Pix payout details isolated for privacy.",
+      "type": "object",
+      "properties": {
+        "creatorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "beneficiaryName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "pixKeyType": { "type": "string", "enum": ["cpf", "cnpj", "email", "phone", "random"] },
+        "pixKey": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "pixBankName": { "type": "string", "maxLength": 80 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "beneficiaryName", "pixKeyType", "pixKey", "pixBankName", "updatedAt"]
+    },
+    "MonetizationCreatorBalance": {
+      "title": "MonetizationCreatorBalance",
+      "description": "Creator monetization accounting balance summary in integer cents.",
+      "type": "object",
+      "properties": {
+        "creatorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "totalEarnedCents": { "type": "number" },
+        "pendingCents": { "type": "number" },
+        "availableCents": { "type": "number" },
+        "withdrawalPendingCents": { "type": "number" },
+        "totalPaidCents": { "type": "number" },
+        "lastOperationId": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "totalEarnedCents", "pendingCents", "availableCents", "withdrawalPendingCents", "totalPaidCents", "lastOperationId", "updatedAt"]
+    },
+    "MonetizationRevenue": {
+      "title": "MonetizationRevenue",
+      "description": "Confirmed or pending ad revenue entry attributed to a manga (or marked unattributed).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "attributionType": { "type": "string", "enum": ["work", "unattributed"] },
+        "mangaId": { "type": "string", "maxLength": 128 },
+        "mangaTitle": { "type": "string", "maxLength": 140 },
+        "creatorId": { "type": "string", "maxLength": 128 },
+        "creatorName": { "type": "string", "maxLength": 80 },
+        "chapterId": { "type": "string", "maxLength": 128 },
+        "chapterNumber": { "type": "number" },
+        "referencePeriod": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "adImpressions": { "type": "number" },
+        "hasAdImpressions": { "type": "boolean" },
+        "grossRevenueCents": { "type": "number" },
+        "hasGrossRevenue": { "type": "boolean" },
+        "networkDeductionsCents": { "type": "number" },
+        "hasNetworkDeductions": { "type": "boolean" },
+        "netRevenueCents": { "type": "number" },
+        "artistPercentApplied": { "type": "number" },
+        "platformPercentApplied": { "type": "number" },
+        "artistShareCents": { "type": "number" },
+        "platformShareCents": { "type": "number" },
+        "releaseBucket": { "type": "string", "enum": ["available", "pending"] },
+        "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "externalRef": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "confirmationStatus": { "type": "string", "enum": ["pending", "confirmed", "cancelled"] },
+        "recordedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "confirmedBy": { "type": "string", "maxLength": 128 },
+        "confirmedAt": { "type": "string", "maxLength": 40 },
+        "importedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "attributionType", "mangaId", "mangaTitle", "creatorId", "creatorName", "chapterId", "chapterNumber", "referencePeriod", "adImpressions", "hasAdImpressions", "grossRevenueCents", "hasGrossRevenue", "networkDeductionsCents", "hasNetworkDeductions", "netRevenueCents", "artistPercentApplied", "platformPercentApplied", "artistShareCents", "platformShareCents", "releaseBucket", "source", "externalRef", "notes", "confirmationStatus", "recordedBy", "confirmedBy", "confirmedAt", "importedAt", "createdAt", "updatedAt"]
+    },
+    "MonetizationLedgerEntry": {
+      "title": "MonetizationLedgerEntry",
+      "description": "Immutable financial ledger movement with audit trail and original entry reference.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["revenue_credit", "platform_fee", "unattributed_revenue", "pending_release", "withdrawal_hold", "withdrawal_release", "payout_paid", "adjustment", "reversal"] },
+        "creatorId": { "type": "string", "maxLength": 128 },
+        "creatorName": { "type": "string", "maxLength": 80 },
+        "mangaId": { "type": "string", "maxLength": 128 },
+        "mangaTitle": { "type": "string", "maxLength": 140 },
+        "chapterId": { "type": "string", "maxLength": 128 },
+        "amountCents": { "type": "number" },
+        "artistPercentApplied": { "type": "number" },
+        "platformPercentApplied": { "type": "number" },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "status": { "type": "string", "enum": ["pending", "available", "released", "completed", "reversed", "cancelled"] },
+        "originalEntryId": { "type": "string", "maxLength": 128 },
+        "relatedRevenueId": { "type": "string", "maxLength": 128 },
+        "relatedRequestId": { "type": "string", "maxLength": 128 },
+        "relatedPaymentId": { "type": "string", "maxLength": 128 },
+        "justification": { "type": "string", "maxLength": 500 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "creatorId", "creatorName", "mangaId", "mangaTitle", "chapterId", "amountCents", "artistPercentApplied", "platformPercentApplied", "origin", "status", "originalEntryId", "relatedRevenueId", "relatedRequestId", "relatedPaymentId", "justification", "createdBy", "createdAt"]
+    },
+    "MonetizationPayoutRequest": {
+      "title": "MonetizationPayoutRequest",
+      "description": "Creator withdrawal request with Pix snapshot and review lifecycle.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "amountCents": { "type": "number" },
+        "beneficiaryNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "pixKeyTypeSnapshot": { "type": "string", "enum": ["cpf", "cnpj", "email", "phone", "random"] },
+        "pixKeySnapshot": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "pixBankNameSnapshot": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected"] },
+        "ledgerEntryId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewNote": { "type": "string", "maxLength": 500 },
+        "reviewedAt": { "type": "string", "maxLength": 40 },
+        "paidAt": { "type": "string", "maxLength": 40 },
+        "paymentId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "creatorId", "creatorName", "amountCents", "beneficiaryNameSnapshot", "pixKeyTypeSnapshot", "pixKeySnapshot", "pixBankNameSnapshot", "status", "ledgerEntryId", "reviewedBy", "reviewNote", "reviewedAt", "paidAt", "paymentId", "createdAt", "updatedAt"]
+    },
+    "MonetizationPayoutPayment": {
+      "title": "MonetizationPayoutPayment",
+      "description": "Manual Pix settlement record with transaction reference and optional receipt.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "creatorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "amountPaidCents": { "type": "number" },
+        "pixKeySnapshot": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "pixKeyTypeSnapshot": { "type": "string", "enum": ["cpf", "cnpj", "email", "phone", "random"] },
+        "transactionRef": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "receiptUrl": { "type": "string", "maxLength": 600 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "paidDate": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "paidBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ledgerEntryId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "requestId", "creatorId", "creatorName", "amountPaidCents", "pixKeySnapshot", "pixKeyTypeSnapshot", "transactionRef", "receiptUrl", "notes", "paidDate", "paidBy", "ledgerEntryId", "createdAt"]
+    },
+    "MonetizationIdempotency": {
+      "title": "MonetizationIdempotency",
+      "description": "Idempotency lock document to prevent duplicate financial operations.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "enum": ["register_revenue", "confirm_revenue", "withdrawal", "pay_payout", "adjustment"] },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "action", "actorId", "createdAt"]
+    },
+    "StimulusSettings": {
+      "title": "StimulusSettings",
+      "description": "Global admin settings for gradual 72h stimulus views on newly published chapters (isolated from monetization).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "enabled": { "type": "boolean" },
+        "minViews": { "type": "number" },
+        "maxViews": { "type": "number" },
+        "durationHours": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "enabled", "minViews", "maxViews", "durationHours", "updatedBy", "updatedAt"]
+    },
+    "MangaWishlist": {
+      "title": "MangaWishlist",
+      "description": "Subscribers who favorited a manga (especially during pre-launch) for launch notifications.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 0, "maxLength": 128 },
+        "addedDuringPreLaunch": { "type": "boolean" },
+        "previewKey": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mangaId", "authorId", "addedDuringPreLaunch", "createdAt"]
+    },
+    "MangaPreview": {
+      "title": "MangaPreview",
+      "description": "Isolated shareable preview snapshot for a single work without exposing creator UID or other works.",
+      "type": "object",
+      "properties": {
+        "previewKey": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "previewSlug": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "synopsis": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "coverUrl": { "type": "string", "maxLength": 600 },
+        "bannerUrl": { "type": "string", "maxLength": 600 },
+        "genres": { "type": "array" },
+        "ageRating": { "type": "string", "enum": ["Livre", "12+", "14+", "16+", "18+"] },
+        "status": { "type": "string", "enum": ["draft", "pre_launch", "ongoing", "completed", "hiatus", "archived"] },
+        "hasMotion": { "type": "boolean" },
+        "chaptersCount": { "type": "number" },
+        "favoritesCount": { "type": "number" },
+        "ratingAverage": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["previewKey", "previewSlug", "mangaId", "authorName", "title", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "hasMotion", "chaptersCount", "favoritesCount", "ratingAverage", "ratingCount", "isActive", "createdAt", "updatedAt"]
+    },
+    "MangaPreviewChapter": {
+      "title": "MangaPreviewChapter",
+      "description": "Prepared chapter metadata mirrored strictly inside an active preview link.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "previewKey": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterNumber": { "type": "number" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "hasMotion": { "type": "boolean" },
+        "pagesCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mangaId", "previewKey", "chapterNumber", "title", "status", "hasMotion", "pagesCount", "createdAt", "updatedAt"]
+    },
+    "MangaPreviewPage": {
+      "title": "MangaPreviewPage",
+      "description": "Prepared page assets mirrored strictly inside an active preview link.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "previewKey": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "pageNumber": { "type": "number" },
+        "originalUrl": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "originalMime": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "motionUrl": { "type": "string", "maxLength": 600 },
+        "motionMime": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mangaId", "chapterId", "previewKey", "pageNumber", "originalUrl", "originalMime", "motionUrl", "motionMime", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public user profiles for readers and creators."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Private user PII and preferences."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Administrator role registry."
+    },
+    "/mangas/{mangaId}": {
+      "schema": { "$ref": "#/entities/Manga" },
+      "description": "Manga series catalog."
+    },
+    "/mangas/{mangaId}/chapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/Chapter" },
+      "description": "Chapters strictly isolated per manga."
+    },
+    "/mangas/{mangaId}/chapters/{chapterId}/pages/{pageId}": {
+      "schema": { "$ref": "#/entities/Page" },
+      "description": "Chapter pages pairing original image and optional Motion asset."
+    },
+    "/mangas/{mangaId}/chapters/{chapterId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Chapter comments."
+    },
+    "/mangas/{mangaId}/ratings/{userId}": {
+      "schema": { "$ref": "#/entities/Rating" },
+      "description": "User ratings per manga."
+    },
+    "/mangas/{mangaId}/readers/{userId}": {
+      "schema": { "$ref": "#/entities/MangaReader" },
+      "description": "Readers with this manga in their Continue Reading history."
+    },
+    "/mangas/{mangaId}/wishlist/{userId}": {
+      "schema": { "$ref": "#/entities/MangaWishlist" },
+      "description": "Wishlist subscribers for pre-launch and launch notifications."
+    },
+    "/manga_previews/{previewKey}": {
+      "schema": { "$ref": "#/entities/MangaPreview" },
+      "description": "Isolated private/early-access preview entry keyed by unguessable previewKey."
+    },
+    "/manga_previews/{previewKey}/chapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/MangaPreviewChapter" },
+      "description": "Prepared chapters available through an active private preview link."
+    },
+    "/manga_previews/{previewKey}/chapters/{chapterId}/pages/{pageId}": {
+      "schema": { "$ref": "#/entities/MangaPreviewPage" },
+      "description": "Pages of prepared chapters available through an active private preview link."
+    },
+    "/users/{userId}/favorites/{mangaId}": {
+      "schema": { "$ref": "#/entities/Favorite" },
+      "description": "User favorite mangas."
+    },
+    "/users/{userId}/history/{mangaId}": {
+      "schema": { "$ref": "#/entities/ReadingHistory" },
+      "description": "User reading history and auto-resume position."
+    },
+    "/follows/{followId}": {
+      "schema": { "$ref": "#/entities/Follow" },
+      "description": "Author follow relationships."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "User notifications."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Moderation reports submitted by users."
+    },
+    "/monetization_settings/{settingsId}": {
+      "schema": { "$ref": "#/entities/MonetizationSettings" },
+      "description": "Monetization split policy and withdrawal rules."
+    },
+    "/monetization_payout_profiles/{creatorId}": {
+      "schema": { "$ref": "#/entities/MonetizationPayoutProfile" },
+      "description": "Creator Pix payout details isolated by owner and admin."
+    },
+    "/monetization_creator_balances/{creatorId}": {
+      "schema": { "$ref": "#/entities/MonetizationCreatorBalance" },
+      "description": "Creator financial balances in integer cents."
+    },
+    "/monetization_revenues/{revenueId}": {
+      "schema": { "$ref": "#/entities/MonetizationRevenue" },
+      "description": "Ad revenue records linked to works/chapters or unattributed."
+    },
+    "/monetization_ledger/{entryId}": {
+      "schema": { "$ref": "#/entities/MonetizationLedgerEntry" },
+      "description": "Immutable internal financial ledger entries."
+    },
+    "/monetization_payout_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/MonetizationPayoutRequest" },
+      "description": "Creator Pix withdrawal requests."
+    },
+    "/monetization_payout_payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/MonetizationPayoutPayment" },
+      "description": "Admin manual Pix payout settlements."
+    },
+    "/monetization_idempotency/{key}": {
+      "schema": { "$ref": "#/entities/MonetizationIdempotency" },
+      "description": "Idempotency locks for financial mutations."
+    },
+    "/app_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StimulusSettings" },
+      "description": "Global platform feature settings such as gradual stimulus view ranges."
+    }
+  }
+}
