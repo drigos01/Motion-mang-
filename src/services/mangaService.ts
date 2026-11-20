@@ -37,7 +37,6 @@ import {
   ChapterComment,
   ChapterPage,
   ChapterStatus,
-  FavoriteItem,
   FollowRelation,
   MAX_LIMITS,
   Manga,
@@ -109,7 +108,6 @@ function toMillis(ts: unknown): number {
 }
 
 const inFlightHistory = new Map<string, Promise<ReadingHistoryItem[]>>();
-const inFlightFavorites = new Map<string, Promise<FavoriteItem[]>>();
 const inFlightFollows = new Map<string, Promise<FollowRelation[]>>();
 
 export interface PublishedCatalogRankingData {
@@ -467,7 +465,6 @@ export async function syncPreviewSnapshot(mangaId: string): Promise<void> {
       status: m.status,
       hasMotion: preparedChapterEntries.some((entry) => entry.chHasMotion),
       chaptersCount: preparedChapters.length,
-      favoritesCount: Math.max(0, m.favoritesCount || 0),
       ratingAverage: Math.min(5, Math.max(0, m.ratingAverage || 0)),
       ratingCount: Math.max(0, m.ratingCount || 0),
       isActive: true,
@@ -739,7 +736,6 @@ export async function createManga(params: {
     hasMotion: false,
     chaptersCount: 0,
     viewsCount: 0,
-    favoritesCount: 0,
     ratingAverage: 0,
     ratingCount: 0,
     launchedFromPreLaunch: false,
@@ -765,7 +761,6 @@ export async function createManga(params: {
     status: mangaDoc.status,
     hasMotion: false,
     chaptersCount: 0,
-    favoritesCount: 0,
     ratingAverage: 0,
     ratingCount: 0,
     isActive: true,
@@ -974,16 +969,6 @@ export async function deleteManga(
     }
 
     try {
-      const ownFavRef = doc(db, 'users', actorUid, 'favorites', mangaId);
-      const ownFavSnap = await getDoc(ownFavRef);
-      if (ownFavSnap.exists()) {
-        await deleteDoc(ownFavRef);
-      }
-    } catch {
-      // Ignore if caller has no favorite record for this manga
-    }
-
-    try {
       await updateDoc(doc(db, 'users', effectiveAuthorId), {
         worksCount: increment(-1),
         updatedAt: serverTimestamp(),
@@ -1108,11 +1093,26 @@ export async function updateChapterStatusAndSync(params: {
   chapterNumber?: number;
 }): Promise<void> {
   const path = `mangas/${params.manga.id}/chapters/${params.chapter.id}`;
+  const readFresh = async (ref: ReturnType<typeof doc>) => {
+    try {
+      return await getDocFromServer(ref);
+    } catch (err) {
+      const code =
+        err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+      if (code === 'unavailable' || code === 'failed-precondition') {
+        return await getDoc(ref);
+      }
+      throw err;
+    }
+  };
+
   try {
+    const chapterRef = doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id);
+    const mangaRef = doc(db, 'mangas', params.manga.id);
     const [pages, chapterSnap, mangaSnap] = await Promise.all([
       fetchChapterPages(params.manga.id, params.chapter.id, true),
-      getDoc(doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id)),
-      getDoc(doc(db, 'mangas', params.manga.id)),
+      readFresh(chapterRef),
+      readFresh(mangaRef),
     ]);
 
     const freshChapter = chapterSnap.exists() ? (chapterSnap.data() as Chapter) : params.chapter;
@@ -1120,14 +1120,21 @@ export async function updateChapterStatusAndSync(params: {
 
     // Strict Motion eligibility: EVERY page in the chapter must have valid Motion
     const hasMotion = hasAllPagesMotion(pages);
-    const batch = writeBatch(db);
+    const rawChapterNumber = Number(params.chapterNumber ?? freshChapter.chapterNumber ?? params.chapter.chapterNumber);
+    const safeChapterNumber = Number.isFinite(rawChapterNumber)
+      ? Math.max(0, Math.min(10000, rawChapterNumber))
+      : 1;
+    const safeTitle =
+      (params.title ?? freshChapter.title ?? params.chapter.title ?? '')
+        .trim()
+        .slice(0, MAX_LIMITS.CHAPTER_TITLE) || `Capítulo ${safeChapterNumber}`;
 
     const chapterUpdate: Record<string, unknown> = {
       status: params.newStatus,
-      title: (params.title ?? params.chapter.title).trim().slice(0, MAX_LIMITS.CHAPTER_TITLE),
-      chapterNumber: params.chapterNumber ?? params.chapter.chapterNumber,
+      title: safeTitle,
+      chapterNumber: safeChapterNumber,
       hasMotion,
-      pagesCount: pages.length,
+      pagesCount: Math.min(500, pages.length),
       updatedAt: serverTimestamp(),
     };
 
@@ -1138,6 +1145,7 @@ export async function updateChapterStatusAndSync(params: {
     let firstWorkWindow: StimulusWindow | null = null;
     if (isFirstEverPublish) {
       const settings = await fetchStimulusSettings();
+      const safeDurationHours = Math.max(1, Math.min(168, Math.round(settings.durationHours || 72)));
       const existingWorkHasBudget =
         (freshManga.stimulusSettledViews ?? 0) > 0 ||
         (Array.isArray(freshManga.stimulusWindows) && freshManga.stimulusWindows.length > 0) ||
@@ -1156,38 +1164,29 @@ export async function updateChapterStatusAndSync(params: {
           maxViews: settings.maxViews,
           hasMotion,
         });
-        const nowMs = Date.now();
-        chapterUpdate.stimulusBudget = budget;
-        chapterUpdate.stimulusSeed = seed;
-        chapterUpdate.stimulusDurationHours = settings.durationHours;
+        const safeBudget = Math.max(0, Math.min(1000, Math.round(budget)));
+        const safeSeed = Math.max(1, Math.min(999999, Math.round(seed)));
+        const nowMs = Math.max(1, Date.now());
+        chapterUpdate.stimulusBudget = safeBudget;
+        chapterUpdate.stimulusSeed = safeSeed;
+        chapterUpdate.stimulusDurationHours = safeDurationHours;
         firstWorkWindow = {
           chapterId: params.chapter.id,
           startedAtMs: nowMs,
-          budget,
-          seed,
-          durationHours: settings.durationHours,
+          budget: safeBudget,
+          seed: safeSeed,
+          durationHours: safeDurationHours,
         };
       } else {
         // Subsequent published chapters share the work's existing funnel budget without rolling new budgets
+        const existingSeed = Number(freshManga.stimulusWindows?.[0]?.seed ?? 1);
+        const safeSeed = Number.isFinite(existingSeed)
+          ? Math.max(1, Math.min(999999, Math.round(existingSeed)))
+          : 1;
         chapterUpdate.stimulusBudget = 0;
-        chapterUpdate.stimulusSeed = freshManga.stimulusWindows?.[0]?.seed ?? 1;
-        chapterUpdate.stimulusDurationHours = settings.durationHours;
+        chapterUpdate.stimulusSeed = safeSeed;
+        chapterUpdate.stimulusDurationHours = safeDurationHours;
       }
-    }
-
-    batch.update(
-      doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id),
-      chapterUpdate
-    );
-
-    for (const p of pages) {
-      batch.update(
-        doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id, 'pages', p.id),
-        {
-          chapterStatus: params.newStatus,
-          updatedAt: serverTimestamp(),
-        }
-      );
     }
 
     // Recompute published chaptersCount & strict manga.hasMotion
@@ -1207,7 +1206,7 @@ export async function updateChapterStatusAndSync(params: {
       updatedAt: serverTimestamp(),
     };
 
-    if (isPublishingWithPages && params.chapter.status !== 'published') {
+    if (isPublishingWithPages && freshChapter.status !== 'published') {
       mangaUpdate.lastChapterPublishedAt = serverTimestamp();
     }
 
@@ -1223,13 +1222,43 @@ export async function updateChapterStatusAndSync(params: {
     }
 
     if (firstWorkWindow) {
-      mangaUpdate.stimulusSettledViews = freshManga.stimulusSettledViews ?? 0;
+      mangaUpdate.stimulusSettledViews = Math.max(0, freshManga.stimulusSettledViews ?? 0);
       mangaUpdate.stimulusWindows = [firstWorkWindow];
     }
 
-    batch.update(doc(db, 'mangas', params.manga.id), mangaUpdate);
-
-    await batch.commit();
+    if (pages.length <= 450) {
+      const batch = writeBatch(db);
+      batch.update(chapterRef, chapterUpdate);
+      for (const p of pages) {
+        batch.update(
+          doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id, 'pages', p.id),
+          {
+            chapterStatus: params.newStatus,
+            updatedAt: serverTimestamp(),
+          }
+        );
+      }
+      batch.update(mangaRef, mangaUpdate);
+      await batch.commit();
+    } else {
+      for (let i = 0; i < pages.length; i += 400) {
+        const pageBatch = writeBatch(db);
+        pages.slice(i, i + 400).forEach((p) => {
+          pageBatch.update(
+            doc(db, 'mangas', params.manga.id, 'chapters', params.chapter.id, 'pages', p.id),
+            {
+              chapterStatus: params.newStatus,
+              updatedAt: serverTimestamp(),
+            }
+          );
+        });
+        await pageBatch.commit();
+      }
+      const metaBatch = writeBatch(db);
+      metaBatch.update(chapterRef, chapterUpdate);
+      metaBatch.update(mangaRef, mangaUpdate);
+      await metaBatch.commit();
+    }
     invalidateCatalogCache();
 
     if (freshManga.previewEnabled && freshManga.previewKey) {
@@ -1461,6 +1490,53 @@ export async function deleteChapterPage(
   }
 }
 
+export async function deleteAllChapterPages(
+  mangaId: string,
+  chapterId: string
+): Promise<number> {
+  const path = `mangas/${mangaId}/chapters/${chapterId}/pages`;
+  try {
+    const existingPages = await fetchChapterPages(mangaId, chapterId, true);
+    const mediaUrlsSet = new Set<string>();
+    existingPages.forEach((p) => {
+      if (p.originalUrl) mediaUrlsSet.add(p.originalUrl);
+      if (p.motionUrl) mediaUrlsSet.add(p.motionUrl);
+    });
+
+    if (existingPages.length > 0) {
+      for (let i = 0; i < existingPages.length; i += 400) {
+        const batch = writeBatch(db);
+        existingPages.slice(i, i + 400).forEach((p) => {
+          batch.delete(doc(db, 'mangas', mangaId, 'chapters', chapterId, 'pages', p.id));
+        });
+        await batch.commit();
+      }
+    }
+
+    await updateDoc(doc(db, 'mangas', mangaId, 'chapters', chapterId), {
+      pagesCount: 0,
+      hasMotion: false,
+      updatedAt: serverTimestamp(),
+    });
+
+    await syncMangaChapterAggregates(mangaId);
+    invalidateCatalogCache();
+    void syncPreviewSnapshot(mangaId);
+
+    const mediaUrlsToDelete = Array.from(mediaUrlsSet);
+    for (let i = 0; i < mediaUrlsToDelete.length; i += 10) {
+      await Promise.allSettled(
+        mediaUrlsToDelete.slice(i, i + 10).map((url) => deleteMediaAsset(url))
+      );
+    }
+
+    return existingPages.length;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+    return 0;
+  }
+}
+
 // --- READER & COMMUNITY FEATURES ---
 
 export async function incrementMangaAndChapterViews(mangaId: string, chapterId: string): Promise<void> {
@@ -1648,445 +1724,6 @@ export async function fetchReadingProgressForManga(
     return snap.exists() ? (snap.data() as ReadingHistoryItem) : null;
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, path);
-  }
-}
-
-export async function fetchUserFavorites(userId: string): Promise<FavoriteItem[]> {
-  const existing = inFlightFavorites.get(userId);
-  if (existing) return existing;
-
-  const path = `users/${userId}/favorites`;
-  const run = async (): Promise<FavoriteItem[]> => {
-    try {
-      const snap = await getDocs(collection(db, 'users', userId, 'favorites'));
-      const rawList = snap.docs.map((d) => d.data() as FavoriteItem);
-
-      const verified: FavoriteItem[] = [];
-      const deletedItems: FavoriteItem[] = [];
-
-      await Promise.all(
-        rawList.map(async (item) => {
-          try {
-            const mSnap = await getDoc(doc(db, 'mangas', item.mangaId));
-            if (mSnap.exists()) {
-              verified.push(item);
-            } else {
-              deletedItems.push(item);
-            }
-          } catch {
-            // If work is currently private ('draft'), check if favorited via an active previewKey
-            if (item.previewKey) {
-              try {
-                const pvSnap = await getDoc(doc(db, 'manga_previews', item.previewKey));
-                if (pvSnap.exists() && (pvSnap.data() as MangaPreview).isActive) {
-                  verified.push(item);
-                }
-              } catch {
-                // Omit if preview was revoked/deleted without deleting favorite
-              }
-            }
-          }
-        })
-      );
-
-      if (
-        deletedItems.length > 0 &&
-        auth.currentUser?.uid === userId &&
-        auth.currentUser?.emailVerified
-      ) {
-        for (const item of deletedItems) {
-          try {
-            await deleteDoc(doc(db, 'users', userId, 'favorites', item.mangaId));
-          } catch {
-            // Ignore individual favorite cleanup error
-          }
-        }
-      }
-
-      verified.sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
-      return verified;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
-    }
-  };
-
-  const promise = run().finally(() => {
-    inFlightFavorites.delete(userId);
-  });
-  inFlightFavorites.set(userId, promise);
-  return promise;
-}
-
-export async function toggleFavoriteManga(
-  userId: string,
-  manga: Pick<
-    Manga,
-    'id' | 'title' | 'coverUrl' | 'authorName' | 'status' | 'previewKey'
-  > & { authorId?: string },
-  options?: {
-    previewKey?: string;
-    isPreviewMode?: boolean;
-    knownFavoritesCount?: number;
-  }
-): Promise<boolean> {
-  const favPath = `users/${userId}/favorites/${manga.id}`;
-  const mangaPath = `mangas/${manga.id}`;
-  const wishlistPath = `mangas/${manga.id}/wishlist/${userId}`;
-  const favRef = doc(db, 'users', userId, 'favorites', manga.id);
-  const mangaRef = doc(db, 'mangas', manga.id);
-  const wishlistRef = doc(db, 'mangas', manga.id, 'wishlist', userId);
-  const effectivePreviewKey = options?.previewKey || manga.previewKey || '';
-  const previewPath = effectivePreviewKey ? `manga_previews/${effectivePreviewKey}` : '';
-  const previewRef = effectivePreviewKey ? doc(db, 'manga_previews', effectivePreviewKey) : null;
-  const isDraftPreview = Boolean(options?.isPreviewMode && manga.status === 'draft');
-
-  const readFresh = async (ref: ReturnType<typeof doc>) => {
-    try {
-      return await getDocFromServer(ref);
-    } catch (err) {
-      const code =
-        err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
-      if (code === 'unavailable' || code === 'failed-precondition') {
-        return await getDoc(ref);
-      }
-      throw err;
-    }
-  };
-
-  // 1. Explicit, individually diagnosed reads (never read private 'draft' manga doc as preview reader)
-  let existingSnap;
-  try {
-    existingSnap = await readFresh(favRef);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, favPath);
-  }
-
-  let freshManga: Manga | null = null;
-  if (!isDraftPreview) {
-    try {
-      const mangaSnap = await readFresh(mangaRef);
-      if (!mangaSnap.exists()) {
-        throw new Error(`Obra "${manga.id}" não encontrada.`);
-      }
-      freshManga = mangaSnap.data() as Manga;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.GET, mangaPath);
-    }
-  }
-
-  let wishlistExists = false;
-  try {
-    const wishlistSnap = await readFresh(wishlistRef);
-    wishlistExists = wishlistSnap.exists();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, wishlistPath);
-  }
-
-  let previewDocExists = false;
-  let previewFavoritesCount = 0;
-  if (previewRef) {
-    try {
-      const pvSnap = await readFresh(previewRef);
-      if (pvSnap.exists()) {
-        const pvData = pvSnap.data() as MangaPreview;
-        if (pvData.mangaId === manga.id) {
-          previewDocExists = true;
-          previewFavoritesCount = Math.max(0, pvData.favoritesCount || 0);
-        }
-      }
-    } catch (err) {
-      if (options?.isPreviewMode) {
-        handleFirestoreError(err, OperationType.GET, previewPath);
-      } else if (import.meta.env?.DEV) {
-        console.warn(`[toggleFavoriteManga] Leitura opcional da prévia falhou (${previewPath}):`, err);
-      }
-    }
-  }
-
-  const resolvedAuthorId = manga.authorId || freshManga?.authorId || '';
-  const buildRestoreBucketPatch = (m: Manga | null): Record<string, string | number> =>
-    m
-      ? {
-          realFavsDayKey: m.realFavsDayKey ?? '',
-          realFavsTodayCount: Math.max(0, m.realFavsTodayCount ?? 0),
-          realFavsPrevDayKey: m.realFavsPrevDayKey ?? '',
-          realFavsPrevDayCount: Math.max(0, m.realFavsPrevDayCount ?? 0),
-        }
-      : {};
-
-  if (existingSnap.exists()) {
-    const existingData = existingSnap.data() as FavoriteItem;
-    const knownCount = freshManga
-      ? Math.max(0, freshManga.favoritesCount || 0)
-      : previewDocExists
-        ? previewFavoritesCount
-        : Math.max(0, options?.knownFavoritesCount ?? 0);
-    const canDecrementManga = freshManga ? knownCount > 0 : previewDocExists && knownCount > 0;
-
-    const rollbackFavDoc: FavoriteItem = {
-      userId,
-      mangaId: manga.id,
-      mangaTitle:
-        (existingData.mangaTitle || manga.title || 'Obra').slice(0, MAX_LIMITS.MANGA_TITLE) ||
-        'Obra',
-      coverUrl: (existingData.coverUrl ?? manga.coverUrl ?? '').slice(0, 600),
-      authorName:
-        (existingData.authorName || manga.authorName || 'Autor').slice(0, MAX_LIMITS.DISPLAY_NAME) ||
-        'Autor',
-      ...(typeof existingData.addedDuringPreLaunch === 'boolean'
-        ? { addedDuringPreLaunch: existingData.addedDuringPreLaunch }
-        : {}),
-      ...(existingData.previewKey
-        ? { previewKey: existingData.previewKey.slice(0, 128) }
-        : {}),
-      createdAt: serverTimestamp(),
-    };
-
-    try {
-      await deleteDoc(favRef);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, favPath);
-    }
-
-    let mangaUpdated = false;
-    if (canDecrementManga) {
-      const bucketPatch = freshManga
-        ? buildNextDailyBucketPatch({
-            prefix: 'realFavs',
-            currentDayKey: freshManga.realFavsDayKey,
-            currentTodayCount: freshManga.realFavsTodayCount,
-            currentPrevDayKey: freshManga.realFavsPrevDayKey,
-            currentPrevDayCount: freshManga.realFavsPrevDayCount,
-            delta: -1,
-          })
-        : {};
-      try {
-        await updateDoc(mangaRef, {
-          favoritesCount: increment(-1),
-          ...bucketPatch,
-          updatedAt: serverTimestamp(),
-        });
-        mangaUpdated = true;
-      } catch (err) {
-        try {
-          await setDoc(favRef, rollbackFavDoc);
-        } catch {
-          // Best-effort rollback
-        }
-        handleFirestoreError(err, OperationType.UPDATE, mangaPath);
-      }
-    }
-
-    let wishlistDeleted = false;
-    if (wishlistExists) {
-      try {
-        await deleteDoc(wishlistRef);
-        wishlistDeleted = true;
-      } catch (err) {
-        if (mangaUpdated) {
-          try {
-            await updateDoc(mangaRef, {
-              favoritesCount: increment(1),
-              ...buildRestoreBucketPatch(freshManga),
-              updatedAt: serverTimestamp(),
-            });
-          } catch {
-            // Best-effort rollback
-          }
-        }
-        try {
-          await setDoc(favRef, rollbackFavDoc);
-        } catch {
-          // Best-effort rollback
-        }
-        handleFirestoreError(err, OperationType.DELETE, wishlistPath);
-      }
-    }
-
-    if (previewRef && previewDocExists && previewFavoritesCount > 0) {
-      try {
-        await updateDoc(previewRef, {
-          favoritesCount: increment(-1),
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        if (options?.isPreviewMode) {
-          if (wishlistDeleted && (resolvedAuthorId || effectivePreviewKey)) {
-            try {
-              await setDoc(wishlistRef, {
-                userId,
-                mangaId: manga.id,
-                authorId: resolvedAuthorId,
-                addedDuringPreLaunch: true,
-                ...(effectivePreviewKey ? { previewKey: effectivePreviewKey.slice(0, 128) } : {}),
-                createdAt: serverTimestamp(),
-              });
-            } catch {
-              // Best-effort rollback
-            }
-          }
-          if (mangaUpdated) {
-            try {
-              await updateDoc(mangaRef, {
-                favoritesCount: increment(1),
-                ...buildRestoreBucketPatch(freshManga),
-                updatedAt: serverTimestamp(),
-              });
-            } catch {
-              // Best-effort rollback
-            }
-          }
-          try {
-            await setDoc(favRef, rollbackFavDoc);
-          } catch {
-            // Best-effort rollback
-          }
-          handleFirestoreError(err, OperationType.UPDATE, previewPath);
-        } else if (import.meta.env?.DEV) {
-          console.warn(`[toggleFavoriteManga] Falha ao atualizar contador da prévia (${previewPath}):`, err);
-        }
-      }
-    }
-
-    invalidateCatalogCache();
-    return false;
-  } else {
-    const addedDuringPreLaunch = manga.status === 'pre_launch' || manga.status === 'draft';
-    const favDoc: FavoriteItem = {
-      userId,
-      mangaId: manga.id,
-      mangaTitle: (manga.title || 'Obra').slice(0, MAX_LIMITS.MANGA_TITLE) || 'Obra',
-      coverUrl: (manga.coverUrl || '').slice(0, 600),
-      authorName: (manga.authorName || 'Autor').slice(0, MAX_LIMITS.DISPLAY_NAME) || 'Autor',
-      addedDuringPreLaunch,
-      ...(effectivePreviewKey ? { previewKey: effectivePreviewKey.slice(0, 128) } : {}),
-      createdAt: serverTimestamp(),
-    };
-
-    try {
-      await setDoc(favRef, favDoc);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, favPath);
-    }
-
-    const bucketPatch = freshManga
-      ? buildNextDailyBucketPatch({
-          prefix: 'realFavs',
-          currentDayKey: freshManga.realFavsDayKey,
-          currentTodayCount: freshManga.realFavsTodayCount,
-          currentPrevDayKey: freshManga.realFavsPrevDayKey,
-          currentPrevDayCount: freshManga.realFavsPrevDayCount,
-          delta: 1,
-        })
-      : {};
-
-    try {
-      await updateDoc(mangaRef, {
-        favoritesCount: increment(1),
-        ...bucketPatch,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      try {
-        await deleteDoc(favRef);
-      } catch {
-        // Best-effort rollback
-      }
-      handleFirestoreError(err, OperationType.UPDATE, mangaPath);
-    }
-
-    let wishlistCreated = false;
-    if (addedDuringPreLaunch && !wishlistExists) {
-      if (!resolvedAuthorId && !effectivePreviewKey) {
-        try {
-          await updateDoc(mangaRef, {
-            favoritesCount: increment(-1),
-            ...buildRestoreBucketPatch(freshManga),
-            updatedAt: serverTimestamp(),
-          });
-        } catch {
-          // Best-effort rollback
-        }
-        try {
-          await deleteDoc(favRef);
-        } catch {
-          // Best-effort rollback
-        }
-        handleFirestoreError(
-          new Error('Não foi possível identificar autor ou chave de prévia para lista de desejos.'),
-          OperationType.CREATE,
-          wishlistPath
-        );
-      }
-
-      const wishlistDoc: MangaWishlistItem = {
-        userId,
-        mangaId: manga.id,
-        authorId: resolvedAuthorId,
-        addedDuringPreLaunch: true,
-        ...(effectivePreviewKey ? { previewKey: effectivePreviewKey.slice(0, 128) } : {}),
-        createdAt: serverTimestamp(),
-      };
-      try {
-        await setDoc(wishlistRef, wishlistDoc);
-        wishlistCreated = true;
-      } catch (err) {
-        try {
-          await updateDoc(mangaRef, {
-            favoritesCount: increment(-1),
-            ...buildRestoreBucketPatch(freshManga),
-            updatedAt: serverTimestamp(),
-          });
-        } catch {
-          // Best-effort rollback
-        }
-        try {
-          await deleteDoc(favRef);
-        } catch {
-          // Best-effort rollback
-        }
-        handleFirestoreError(err, OperationType.CREATE, wishlistPath);
-      }
-    }
-
-    if (previewRef && previewDocExists) {
-      try {
-        await updateDoc(previewRef, {
-          favoritesCount: increment(1),
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        if (options?.isPreviewMode) {
-          if (wishlistCreated) {
-            try {
-              await deleteDoc(wishlistRef);
-            } catch {
-              // Best-effort rollback
-            }
-          }
-          try {
-            await updateDoc(mangaRef, {
-              favoritesCount: increment(-1),
-              ...buildRestoreBucketPatch(freshManga),
-              updatedAt: serverTimestamp(),
-            });
-          } catch {
-            // Best-effort rollback
-          }
-          try {
-            await deleteDoc(favRef);
-          } catch {
-            // Best-effort rollback
-          }
-          handleFirestoreError(err, OperationType.UPDATE, previewPath);
-        } else if (import.meta.env?.DEV) {
-          console.warn(`[toggleFavoriteManga] Falha ao atualizar contador da prévia (${previewPath}):`, err);
-        }
-      }
-    }
-
-    invalidateCatalogCache();
-    return true;
   }
 }
 
@@ -2843,20 +2480,11 @@ export async function deleteUserAccount(params: {
       await deleteManga(m.id, params.targetUid, Boolean(params.asAdmin));
     }
 
-    // 4. Clean up user's history and favorites subcollections
+    // 4. Clean up user's history subcollection
     const histSnap = await getDocs(collection(db, 'users', params.targetUid, 'history'));
     for (let i = 0; i < histSnap.docs.length; i += 450) {
       const batch = writeBatch(db);
       for (const d of histSnap.docs.slice(i, i + 450)) {
-        batch.delete(d.ref);
-      }
-      await batch.commit();
-    }
-
-    const favSnap = await getDocs(collection(db, 'users', params.targetUid, 'favorites'));
-    for (let i = 0; i < favSnap.docs.length; i += 450) {
-      const batch = writeBatch(db);
-      for (const d of favSnap.docs.slice(i, i + 450)) {
         batch.delete(d.ref);
       }
       await batch.commit();

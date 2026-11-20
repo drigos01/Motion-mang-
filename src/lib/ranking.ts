@@ -1,7 +1,6 @@
 import { Chapter, ChapterPage, Manga, TractionClassification } from '../types/manga';
 import {
   computeMangaRecent24hStimulusViews,
-  computeMangaStimulusLikes,
   computeMangaStimulusViews,
   computeRecent24hFromDailyBuckets,
   toMillisValue,
@@ -49,7 +48,6 @@ export interface MangaChapterStats {
 
 export interface RecentTractionResult {
   recentRealViews24h: number;
-  recentRealFavorites24h: number;
   recentStimulusViews24h: number;
   real24hScore: number;
   stimulus24hScore: number;
@@ -298,14 +296,11 @@ export function computeMangaChapterStats(
       Math.log2(publishedChaptersCount + 1) * 2.4
     );
     const realViews = Math.max(0, manga.realViewsCount ?? manga.viewsCount ?? 0);
-    const realFavs = Math.max(0, manga.realFavoritesCount ?? manga.favoritesCount ?? 0);
     const viewsPerChapter = realViews / publishedChaptersCount;
     // Works with many chapters but near-zero real engagement receive only a small depth factor
     const qualityGate = Math.min(
       1,
-      0.22 +
-        Math.min(0.55, (viewsPerChapter / 15) * 0.55) +
-        Math.min(0.23, (Math.log10(realFavs + 1) / 1.5) * 0.23)
+      0.25 + Math.min(0.75, (viewsPerChapter / 15) * 0.75)
     );
     chapterDepthScore = rawLogDepth * qualityGate;
   }
@@ -355,21 +350,12 @@ export function computeRecentTraction(
       manga.realViewsPrevDayCount,
       nowMs
     );
-  const recentRealFavorites24h =
-    manga.recentRealFavorites24h ??
-    computeRecent24hFromDailyBuckets(
-      manga.realFavsDayKey,
-      manga.realFavsTodayCount,
-      manga.realFavsPrevDayKey,
-      manga.realFavsPrevDayCount,
-      nowMs
-    );
   const recentStimulusViews24h =
     manga.recentStimulusViews24h ?? computeMangaRecent24hStimulusViews(manga, nowMs);
 
   const real24hScore = Math.min(
     RANKING_CONSTANTS.MAX_RECENT_REAL_TRACTION_BONUS,
-    Math.log10(recentRealViews24h + 1) * 4.2 + Math.log10(recentRealFavorites24h + 1) * 5.0
+    Math.log10(recentRealViews24h + 1) * 4.2
   );
 
   const stimulus24hScore = Math.min(
@@ -395,19 +381,18 @@ export function computeRecentTraction(
   const isFreshChapter72h = stats.publishedChaptersCount > 0 && ageHours <= 72;
   const momentumIndex =
     recentRealViews24h * 1.5 +
-    recentRealFavorites24h * 8 +
     recentStimulusViews24h * 0.35 +
     (isFreshChapter72h ? 6 : 0);
 
   let classification: TractionClassification = 'estavel';
   if (
     manga.status !== 'pre_launch' &&
-    (recentRealViews24h >= 20 || recentRealFavorites24h >= 4 || momentumIndex >= 35)
+    (recentRealViews24h >= 20 || momentumIndex >= 35)
   ) {
     classification = 'em_alta';
   } else if (
     manga.status !== 'pre_launch' &&
-    (recentRealViews24h >= 5 || recentRealFavorites24h >= 1 || recentStimulusViews24h >= 15)
+    (recentRealViews24h >= 5 || recentStimulusViews24h >= 15)
   ) {
     classification = 'em_ascensao';
   } else if (
@@ -420,7 +405,6 @@ export function computeRecentTraction(
 
   return {
     recentRealViews24h,
-    recentRealFavorites24h,
     recentStimulusViews24h,
     real24hScore,
     stimulus24hScore,
@@ -446,7 +430,6 @@ export function computeMangaRankingScore(
   const traction = computeRecentTraction(manga, stats, nowMs);
 
   const realViews = Math.max(0, manga.realViewsCount ?? manga.viewsCount ?? 0);
-  const realFavorites = Math.max(0, manga.realFavoritesCount ?? manga.favoritesCount ?? 0);
   const realRatingCount = Math.max(0, manga.realRatingCount ?? manga.ratingCount ?? 0);
   const realRatingAverage = Math.min(
     5,
@@ -455,8 +438,6 @@ export function computeMangaRankingScore(
 
   const stimulusViews =
     manga.stimulusViewsCount ?? computeMangaStimulusViews(manga, nowMs);
-  const stimulusLikes =
-    manga.stimulusLikesCount ?? computeMangaStimulusLikes(manga, nowMs);
 
   const bayesianRating = computeBayesianRating(realRatingAverage, realRatingCount);
   // Real ratings lift quality when rated; unrated gets neutral prior score
@@ -466,8 +447,7 @@ export function computeMangaRankingScore(
       : Math.max(0, (RANKING_CONSTANTS.BAYESIAN_PRIOR_MEAN - 3.0) * 5.0);
 
   const realViewsScore = Math.log10(realViews + 1) * 12;
-  const realFavoritesScore = Math.log10(realFavorites + 1) * 18;
-  const trueEngagement = realViewsScore + realFavoritesScore + bayesianRatingScore;
+  const trueEngagement = realViewsScore + bayesianRatingScore;
 
   // Capped proportional + volume Motion bonus (§1)
   const motionBonus = stats.hasStrictMotion
@@ -486,7 +466,7 @@ export function computeMangaRankingScore(
   // Modest stimulus discovery boost that can never override real proven hits (§2 & §3)
   const stimulusDiscovery = Math.min(
     RANKING_CONSTANTS.MAX_STIMULUS_DISCOVERY_BONUS,
-    Math.log10(stimulusViews + 1) * 0.9 + Math.min(0.8, stimulusLikes * 0.03)
+    Math.log10(stimulusViews + 1) * 0.9
   );
 
   const genreMatchBonus =
@@ -518,7 +498,7 @@ export function computeMangaRankingScore(
   }
   if (trueEngagement >= 40) {
     reasons.push('Alto engajamento real');
-  } else if (realViews > 0 || realFavorites > 0) {
+  } else if (realViews > 0) {
     reasons.push('Engajamento real ativo');
   }
   if (stats.retentionTransitions.length > 0 && stats.retentionScore >= 9) {

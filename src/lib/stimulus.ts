@@ -113,7 +113,7 @@ export function computeStimulusProgressAtTime(
  * Computes the total work-level stimulus views already delivered by `nowMs`.
  * New works hold a single budget in `stimulusWindows[0]`; if legacy works have
  * historical entries in `stimulusWindows[1..]`, all persisted windows are summed
- * so historical views and likes are preserved without modifying Firestore.
+ * so historical views are preserved without modifying Firestore.
  */
 export function computeMangaStimulusViews(manga: Manga, nowMs = Date.now()): number {
   const settled = Math.max(0, manga.stimulusSettledViews ?? 0);
@@ -139,34 +139,6 @@ export function computeMangaRecent24hStimulusViews(manga: Manga, nowMs = Date.no
   const current = computeMangaStimulusViews(manga, nowMs);
   const previous = computeMangaStimulusViews(manga, nowMs - 24 * 3600000);
   return Math.max(0, current - previous);
-}
-
-/**
- * Computes organic stimulus likes strictly smaller than delivered stimulus views (2.5% - 6.2%).
- * Kept strictly separated from realFavoritesCount in `stimulusLikesCount`.
- */
-export function computeStimulusLikesForViews(
-  views: number,
-  seed: number,
-  hasMotion = false
-): number {
-  const safeViews = Math.max(0, Math.floor(views));
-  if (safeViews < 12) return 0;
-  const baseRate = hasMotion ? 0.035 : 0.025;
-  const spread = hasMotion ? 0.027 : 0.023;
-  const rate = baseRate + spread * deterministicUnitRandom((seed || 1) + 7919, 1);
-  const rawLikes = Math.floor(safeViews * rate);
-  const hardCeiling = Math.min(Math.floor(safeViews * 0.08), Math.max(0, safeViews - 1));
-  return Math.max(0, Math.min(rawLikes, hardCeiling));
-}
-
-export function computeMangaStimulusLikes(manga: Manga, nowMs = Date.now()): number {
-  const deliveredViews = computeMangaStimulusViews(manga, nowMs);
-  if (deliveredViews < 12) return 0;
-  const windows = Array.isArray(manga.stimulusWindows) ? manga.stimulusWindows : [];
-  const seed =
-    windows.find((w) => (w?.seed ?? 0) > 0)?.seed ?? hashStringSeed(manga.id || 'manga');
-  return computeStimulusLikesForViews(deliveredViews, seed, Boolean(manga.hasMotion));
 }
 
 /**
@@ -203,7 +175,7 @@ export function computeRecent24hFromDailyBuckets(
 }
 
 export function buildNextDailyBucketPatch(params: {
-  prefix: 'realViews' | 'realFavs';
+  prefix: 'realViews';
   currentDayKey?: string;
   currentTodayCount?: number;
   currentPrevDayKey?: string;
@@ -366,18 +338,12 @@ export function computeChapterStimulusViews(chapter: Chapter, nowMs = Date.now()
   return computeStimulusProgressAtTime(startedAtMs, budget, seed, durationHours, nowMs);
 }
 
-export function computeViewsLikesRatioPercent(views: number, likes: number): number {
-  if (!views || views <= 0 || !likes || likes <= 0) return 0;
-  return Math.round((likes / views) * 1000) / 10;
-}
-
 export interface MilestoneStorageAdapter {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
 }
 
 const VIEW_MILESTONES = [50, 100, 250, 500, 1000];
-const FAVORITE_MILESTONES = [10, 25, 50];
 const FOLLOWER_MILESTONES = [10, 25, 50];
 
 export function evaluateNewStimulusMilestones(params: {
@@ -424,20 +390,6 @@ export function evaluateNewStimulusMilestones(params: {
         }
       }
     }
-
-    const realFavorites = m.realFavoritesCount ?? m.favoritesCount ?? 0;
-    for (const threshold of FAVORITE_MILESTONES) {
-      if (realFavorites >= threshold) {
-        const token = `l:${m.id}:${threshold}`;
-        if (!seen.has(token)) {
-          seen.add(token);
-          newlyAchieved.push({
-            weight: threshold * 15,
-            message: `Marco alcançado! "${m.title}" chegou a ${threshold.toLocaleString('pt-BR')} favoritos reais.`,
-          });
-        }
-      }
-    }
   }
 
   for (const threshold of FOLLOWER_MILESTONES) {
@@ -476,18 +428,6 @@ export function enrichMangaWithViews(manga: Manga, nowMs = Date.now()): Manga {
     manga.realViewsPrevDayCount,
     nowMs
   );
-  const recentRealFavorites24h = computeRecent24hFromDailyBuckets(
-    manga.realFavsDayKey,
-    manga.realFavsTodayCount,
-    manga.realFavsPrevDayKey,
-    manga.realFavsPrevDayCount,
-    nowMs
-  );
-
-  // Internal separation: real vs stimulated likes remain isolated in `realFavoritesCount`
-  // and `stimulusLikesCount`, while `favoritesCount` combines both for public/studio display.
-  const realFavoritesCount = Math.max(0, manga.realFavoritesCount ?? manga.favoritesCount ?? 0);
-  const stimulusLikesCount = computeMangaStimulusLikes(manga, nowMs);
 
   const realRatingCount = Math.max(0, manga.realRatingCount ?? manga.ratingCount ?? 0);
   const realRatingAverage = Math.min(5, Math.max(0, manga.realRatingAverage ?? manga.ratingAverage ?? 0));
@@ -499,10 +439,6 @@ export function enrichMangaWithViews(manga: Manga, nowMs = Date.now()): Manga {
     viewsCount: realViewsCount + stimulusViewsCount,
     recentStimulusViews24h,
     recentRealViews24h,
-    recentRealFavorites24h,
-    realFavoritesCount,
-    stimulusLikesCount,
-    favoritesCount: realFavoritesCount + stimulusLikesCount,
     realRatingCount,
     realRatingAverage,
     ratingCount: realRatingCount,

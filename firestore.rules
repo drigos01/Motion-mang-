@@ -116,7 +116,7 @@ service cloud.firestore {
           'id', 'authorId', 'authorName', 'title', 'slug', 'synopsis',
           'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status',
           'moderationStatus', 'isFeatured', 'hasMotion', 'chaptersCount',
-          'viewsCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'viewsCount', 'ratingAverage', 'ratingCount',
           'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
@@ -149,7 +149,7 @@ service cloud.firestore {
         data.hasMotion is bool &&
         data.chaptersCount is number && data.chaptersCount >= 0 &&
         data.viewsCount is number && data.viewsCount >= 0 &&
-        data.favoritesCount is number && data.favoritesCount >= 0 &&
+        (!('favoritesCount' in data) || (data.favoritesCount is number && data.favoritesCount >= 0)) &&
         data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5 &&
         data.ratingCount is number && data.ratingCount >= 0 &&
         (!('stimulusSettledViews' in data) || (data.stimulusSettledViews is number && data.stimulusSettledViews >= 0)) &&
@@ -171,10 +171,6 @@ service cloud.firestore {
         (!('realViewsTodayCount' in data) || (data.realViewsTodayCount is number && data.realViewsTodayCount >= 0)) &&
         (!('realViewsPrevDayKey' in data) || isValidString(data.realViewsPrevDayKey, 0, 12)) &&
         (!('realViewsPrevDayCount' in data) || (data.realViewsPrevDayCount is number && data.realViewsPrevDayCount >= 0)) &&
-        (!('realFavsDayKey' in data) || isValidString(data.realFavsDayKey, 0, 12)) &&
-        (!('realFavsTodayCount' in data) || (data.realFavsTodayCount is number && data.realFavsTodayCount >= 0)) &&
-        (!('realFavsPrevDayKey' in data) || isValidString(data.realFavsPrevDayKey, 0, 12)) &&
-        (!('realFavsPrevDayCount' in data) || (data.realFavsPrevDayCount is number && data.realFavsPrevDayCount >= 0)) &&
         (!('lastChapterPublishedAt' in data) || data.lastChapterPublishedAt is timestamp) &&
         (!('launchedAt' in data) || data.launchedAt is timestamp) &&
         (!('launchedFromPreLaunch' in data) || data.launchedFromPreLaunch is bool) &&
@@ -294,19 +290,6 @@ service cloud.firestore {
         isValidString(data.userName, 1, 80) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
-    }
-
-    function isValidFavorite(data, userId, mangaId) {
-      return data.keys().hasAll(['userId', 'mangaId', 'mangaTitle', 'coverUrl', 'authorName', 'createdAt']) &&
-        data.keys().hasOnly(['userId', 'mangaId', 'mangaTitle', 'coverUrl', 'authorName', 'addedDuringPreLaunch', 'previewKey', 'createdAt']) &&
-        data.userId == userId &&
-        data.mangaId == mangaId &&
-        isValidString(data.mangaTitle, 1, 140) &&
-        isValidString(data.coverUrl, 0, 600) &&
-        isValidString(data.authorName, 1, 80) &&
-        (!('addedDuringPreLaunch' in data) || data.addedDuringPreLaunch is bool) &&
-        (!('previewKey' in data) || isValidString(data.previewKey, 0, 128)) &&
-        data.createdAt is timestamp;
     }
 
     function isValidHistory(data, userId, mangaId) {
@@ -654,7 +637,7 @@ service cloud.firestore {
       return data.keys().hasAll([
           'previewKey', 'previewSlug', 'mangaId', 'authorName', 'title', 'synopsis',
           'coverUrl', 'bannerUrl', 'genres', 'ageRating', 'status', 'hasMotion',
-          'chaptersCount', 'favoritesCount', 'ratingAverage', 'ratingCount',
+          'chaptersCount', 'ratingAverage', 'ratingCount',
           'isActive', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
@@ -679,7 +662,7 @@ service cloud.firestore {
         data.status in ['draft', 'pre_launch', 'ongoing', 'completed', 'hiatus', 'archived'] &&
         data.hasMotion is bool &&
         data.chaptersCount is number && data.chaptersCount >= 0 &&
-        data.favoritesCount is number && data.favoritesCount >= 0 &&
+        (!('favoritesCount' in data) || (data.favoritesCount is number && data.favoritesCount >= 0)) &&
         data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5 &&
         data.ratingCount is number && data.ratingCount >= 0 &&
         data.isActive is bool &&
@@ -787,17 +770,6 @@ service cloud.firestore {
         allow delete: if isValidId(userId) && isValidId(docId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
       }
 
-      match /favorites/{mangaId} {
-        allow get: if isValidId(userId) && isValidId(mangaId) && (isOwner(userId) || isAdmin());
-        allow list: if isOwner(userId) || isAdmin();
-        allow create: if isValidId(userId) && isValidId(mangaId) && isVerified() && isOwner(userId) &&
-          isValidFavorite(incoming(), userId, mangaId) &&
-          exists(/databases/$(database)/documents/mangas/$(mangaId)) &&
-          incoming().createdAt == request.time;
-        allow update: if false;
-        allow delete: if isValidId(userId) && isValidId(mangaId) && isVerified() && resource != null && (isOwner(userId) || isAdmin());
-      }
-
       match /history/{mangaId} {
         allow get: if isValidId(userId) && isValidId(mangaId) && (isOwner(userId) || isAdmin());
         allow list: if isOwner(userId) || isAdmin();
@@ -831,7 +803,7 @@ service cloud.firestore {
         incoming().moderationStatus == 'approved' &&
         incoming().isFeatured == false &&
         incoming().viewsCount == 0 &&
-        incoming().favoritesCount == 0 &&
+        (!('favoritesCount' in incoming()) || incoming().favoritesCount == 0) &&
         incoming().ratingAverage == 0 &&
         incoming().ratingCount == 0 &&
         !('launchedAt' in incoming()) &&
@@ -886,24 +858,6 @@ service cloud.firestore {
                incoming().realViewsPrevDayCount == existing().realViewsTodayCount ||
                (('realViewsPrevDayCount' in existing()) && incoming().realViewsPrevDayCount == existing().realViewsPrevDayCount) ||
                (!('realViewsPrevDayCount' in existing()) && incoming().realViewsPrevDayCount == 0))
-            ))) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly([
-            'favoritesCount', 'realFavsDayKey', 'realFavsTodayCount',
-            'realFavsPrevDayKey', 'realFavsPrevDayCount', 'updatedAt'
-          ]) &&
-            (incoming().favoritesCount == existing().favoritesCount + 1 ||
-             (existing().favoritesCount > 0 && incoming().favoritesCount == existing().favoritesCount - 1)) &&
-            (!('realFavsTodayCount' in incoming()) || (
-              incoming().realFavsTodayCount >= 0 &&
-              (
-                (!('realFavsTodayCount' in existing()) && incoming().realFavsTodayCount <= 1) ||
-                (('realFavsTodayCount' in existing()) && incoming().realFavsTodayCount <= existing().realFavsTodayCount + 1)
-              ) &&
-              (!('realFavsPrevDayCount' in incoming()) ||
-               !('realFavsTodayCount' in existing()) ||
-               incoming().realFavsPrevDayCount == existing().realFavsTodayCount ||
-               (('realFavsPrevDayCount' in existing()) && incoming().realFavsPrevDayCount == existing().realFavsPrevDayCount) ||
-               (!('realFavsPrevDayCount' in existing()) && incoming().realFavsPrevDayCount == 0))
             ))) ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt']))
         );
@@ -1366,10 +1320,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           isAdmin() ||
           (exists(/databases/$(database)/documents/mangas/$(existing().mangaId)) &&
-            get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['favoritesCount', 'updatedAt']) &&
-            (incoming().favoritesCount == existing().favoritesCount + 1 ||
-             (existing().favoritesCount > 0 && incoming().favoritesCount == existing().favoritesCount - 1)))
+            get(/databases/$(database)/documents/mangas/$(existing().mangaId)).data.authorId == request.auth.uid)
         );
       allow delete: if isValidId(previewKey) && isVerified() && resource != null && (
         isAdmin() ||

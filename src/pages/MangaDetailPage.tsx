@@ -4,7 +4,6 @@ import {
   BookOpen,
   Film,
   Flag,
-  Heart,
   Lock,
   Play,
   Sparkles,
@@ -23,10 +22,8 @@ import {
   fetchMangaPreviewByKey,
   fetchMangaRatings,
   fetchReadingProgressForManga,
-  fetchUserFavorites,
   fetchUserFollows,
   submitMangaRating,
-  toggleFavoriteManga,
   toggleFollowAuthor,
 } from '../services/mangaService';
 import {
@@ -42,8 +39,28 @@ import {
 interface MangaDetailPageProps {
   mangaId?: string;
   previewKey?: string;
+  returnRoute?: AppRoute;
+  onReturn?: () => void;
   onNavigate: (route: AppRoute) => void;
   onOpenAuth: () => void;
+}
+
+function getReturnLabel(returnRoute?: AppRoute): string {
+  switch (returnRoute?.name) {
+    case 'explore':
+      return 'Voltar ao catálogo';
+    case 'library':
+      return 'Voltar à biblioteca';
+    case 'creator':
+      return 'Voltar ao Estúdio';
+    case 'admin':
+      return 'Voltar ao Painel';
+    case 'profile':
+      return 'Voltar ao Perfil';
+    case 'home':
+    default:
+      return 'Voltar ao início';
+  }
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -55,7 +72,14 @@ const STATUS_LABELS: Record<string, string> = {
   archived: 'Arquivado',
 };
 
-export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }: MangaDetailPageProps) {
+export function MangaDetailPage({
+  mangaId,
+  previewKey,
+  returnRoute = { name: 'home' },
+  onReturn,
+  onNavigate,
+  onOpenAuth,
+}: MangaDetailPageProps) {
   const { user, profile, notifications } = useAuth();
   const isPreviewMode = Boolean(previewKey);
   const accountRemovedCount = notifications.filter((n) => n.type === 'account_removed').length;
@@ -66,14 +90,12 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [ratings, setRatings] = useState<MangaRating[]>([]);
   const [resumeItem, setResumeItem] = useState<ReadingHistoryItem | null>(null);
-  const [isFavorite, setIsFavorite] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [myScore, setMyScore] = useState(5);
   const [myReview, setMyReview] = useState('');
   const [savingRating, setSavingRating] = useState(false);
-  const [savingFavorite, setSavingFavorite] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
 
@@ -96,13 +118,6 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
         }
         setPreviewData(res.preview);
         setPreviewChapters(res.chapters);
-
-        if (user) {
-          const favs = await fetchUserFavorites(user.uid).catch(() => []);
-          setIsFavorite(favs.some((f) => f.mangaId === res.preview.mangaId));
-        } else {
-          setIsFavorite(false);
-        }
         return;
       }
 
@@ -134,12 +149,10 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
         }
 
         if (user) {
-          const [favs, follows, hist] = await Promise.all([
-            fetchUserFavorites(user.uid),
+          const [follows, hist] = await Promise.all([
             fetchUserFollows(user.uid),
             fetchReadingProgressForManga(user.uid, m.id),
           ]);
-          setIsFavorite(favs.some((f) => f.mangaId === m.id));
           setIsFollowing(follows.some((f) => f.authorId === m.authorId));
           setResumeItem(hist);
 
@@ -158,72 +171,6 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
   useEffect(() => {
     void loadAll();
   }, [mangaId, previewKey, user?.uid, accountRemovedCount]);
-
-  const handleToggleFavorite = async () => {
-    if (!user) {
-      onOpenAuth();
-      return;
-    }
-    if (!user.emailVerified) {
-      setActionError('Verifique seu e-mail antes de favoritar obras.');
-      return;
-    }
-    if (savingFavorite) return;
-
-    setActionError(null);
-    setSavingFavorite(true);
-    try {
-      if (isPreviewMode && previewData && previewKey) {
-        const next = await toggleFavoriteManga(
-          user.uid,
-          {
-            id: previewData.mangaId,
-            title: previewData.title,
-            coverUrl: previewData.coverUrl,
-            authorName: previewData.authorName,
-            status: previewData.status,
-            previewKey,
-          },
-          {
-            previewKey,
-            isPreviewMode: true,
-            knownFavoritesCount: previewData.favoritesCount,
-          }
-        );
-        setIsFavorite(next);
-        setPreviewData((prev) =>
-          prev ? { ...prev, favoritesCount: Math.max(0, prev.favoritesCount + (next ? 1 : -1)) } : prev
-        );
-        return;
-      }
-
-      if (!manga) return;
-      const next = await toggleFavoriteManga(user.uid, manga, {
-        isPreviewMode: false,
-        knownFavoritesCount: manga.realFavoritesCount ?? manga.favoritesCount,
-      });
-      setIsFavorite(next);
-      setManga((prev) =>
-        prev
-          ? {
-              ...prev,
-              favoritesCount: Math.max(0, prev.favoritesCount + (next ? 1 : -1)),
-              realFavoritesCount:
-                prev.realFavoritesCount !== undefined
-                  ? Math.max(0, prev.realFavoritesCount + (next ? 1 : -1))
-                  : undefined,
-            }
-          : prev
-      );
-    } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('[MangaDetailPage] Erro ao atualizar favorito/lista de desejos:', err);
-      }
-      setActionError('Não foi possível atualizar seu favorito agora. Tente novamente.');
-    } finally {
-      setSavingFavorite(false);
-    }
-  };
 
   const handleToggleFollow = async () => {
     if (isPreviewMode) return;
@@ -331,7 +278,6 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
   const displayStatus = isPreviewMode ? previewData!.status : manga!.status;
   const displayHasMotion = isPreviewMode ? previewData!.hasMotion : manga!.hasMotion;
   const displayAuthorName = isPreviewMode ? previewData!.authorName : manga!.authorName;
-  const displayFavoritesCount = isPreviewMode ? previewData!.favoritesCount : manga!.favoritesCount;
   const displayRatingAverage = isPreviewMode ? previewData!.ratingAverage : manga!.ratingAverage;
   const displayRatingCount = isPreviewMode ? previewData!.ratingCount : manga!.ratingCount;
 
@@ -366,11 +312,11 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
           {!isPreviewMode && (
             <button
               type="button"
-              onClick={() => onNavigate({ name: 'explore' })}
+              onClick={() => (onReturn ? onReturn() : onNavigate(returnRoute))}
               className="inline-flex items-center gap-2 text-xs sm:text-sm text-zinc-400 hover:text-white mb-6 transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
-              Voltar ao catálogo
+              {getReturnLabel(returnRoute)}
             </button>
           )}
 
@@ -462,7 +408,6 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
                     )}
                   </span>
                 )}
-                <span>{displayFavoritesCount} favoritos</span>
                 <span>
                   {isPreviewMode
                     ? `${previewChapters.length} capítulos preparados`
@@ -480,9 +425,9 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
                 <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-400/25 flex items-start gap-3 text-xs sm:text-sm text-amber-100">
                   <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-white">Obra em Pré-lançamento (Lista de Desejos):</strong>{' '}
-                    Favorite agora para receber notificação automática e destaque na página inicial
-                    assim que o primeiro capítulo oficial for lançado!
+                    <strong className="text-white">Obra em Pré-lançamento:</strong>{' '}
+                    Siga o autor para ser notificado assim que o primeiro capítulo oficial for
+                    lançado!
                   </div>
                 </div>
               )}
@@ -586,26 +531,6 @@ export function MangaDetailPage({ mangaId, previewKey, onNavigate, onOpenAuth }:
                       </button>
                     )
                   )}
-
-                  <button
-                    type="button"
-                    onClick={handleToggleFavorite}
-                    disabled={savingFavorite}
-                    className={`min-h-[44px] inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-colors disabled:opacity-60 ${
-                      isFavorite
-                        ? 'bg-[#E11D48]/15 border-[#E11D48]/50 text-[#FB7185]'
-                        : 'bg-white/5 border-white/10 text-zinc-200 hover:bg-white/10'
-                    }`}
-                  >
-                    <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                    {isFavorite
-                      ? isPreLaunchWork
-                        ? 'Na Lista de Desejos'
-                        : 'Favoritado'
-                      : isPreLaunchWork
-                        ? 'Adicionar à Lista de Desejos'
-                        : 'Favoritar'}
-                  </button>
 
                   {!isPreviewMode && manga && (
                     <button

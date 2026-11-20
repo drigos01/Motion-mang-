@@ -13,7 +13,6 @@ import { useAuth } from '../context/AuthContext';
 import {
   deleteNotification,
   fetchReadingHistoryForUser,
-  fetchUserFavorites,
   fetchUserFollows,
 } from '../services/mangaService';
 
@@ -165,10 +164,7 @@ export function Navbar({ route, onNavigate, onOpenAuth }: NavbarProps) {
                               try {
                                 if (user?.emailVerified) {
                                   if (n.type === 'manga_deleted') {
-                                    await Promise.allSettled([
-                                      fetchReadingHistoryForUser(user.uid),
-                                      fetchUserFavorites(user.uid),
-                                    ]);
+                                    await fetchReadingHistoryForUser(user.uid).catch(() => {});
                                   } else if (n.type === 'account_removed') {
                                     await fetchUserFollows(user.uid).catch(() => {});
                                   }

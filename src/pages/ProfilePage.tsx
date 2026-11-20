@@ -271,7 +271,7 @@ export function ProfilePage({ onOpenAuth, onNavigate }: ProfilePageProps) {
             maxLength={400}
             value={bio}
             onChange={(e) => setBio(e.target.value)}
-            placeholder="Conte sobre suas obras ou gêneros favoritos..."
+            placeholder="Conte sobre suas obras ou gêneros preferidos..."
             className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white"
           />
         </div>
@@ -340,8 +340,8 @@ export function ProfilePage({ onOpenAuth, onNavigate }: ProfilePageProps) {
           <div className="space-y-1">
             <h2 className="font-display text-base font-semibold text-white">Excluir Conta</h2>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Remove permanentemente seu perfil, suas obras, seguidores, favoritos e histórico de
-              leitura, notificando os usuários afetados.
+              Remove permanentemente seu perfil, suas obras, seguidores e histórico de leitura,
+              notificando os usuários afetados.
             </p>
           </div>
 

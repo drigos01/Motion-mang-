@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, BookOpen, Compass, Film, Heart, PenTool, Play, Sparkles } from 'lucide-react';
+import { ArrowRight, BookOpen, Compass, Film, PenTool, Play, Sparkles } from 'lucide-react';
 import { MangaCard } from '../components/MangaCard';
 import { AppRoute } from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
@@ -13,18 +13,10 @@ import {
 import {
   fetchPublishedCatalogWithRankingData,
   fetchReadingHistoryForUser,
-  fetchUserFavorites,
 } from '../services/mangaService';
-import { Chapter, FavoriteItem, GENRE_OPTIONS, Manga, ReadingHistoryItem } from '../types/manga';
+import { Chapter, GENRE_OPTIONS, Manga, ReadingHistoryItem } from '../types/manga';
 
 const HERO_BACKDROP = '/src/assets/images/hero_ink_atmosphere_1794869519725.jpg';
-
-function tsMillis(ts: unknown): number {
-  if (ts && typeof ts === 'object' && 'toMillis' in ts && typeof (ts as { toMillis: () => number }).toMillis === 'function') {
-    return (ts as { toMillis: () => number }).toMillis();
-  }
-  return 0;
-}
 
 interface HomePageProps {
   onNavigate: (route: AppRoute) => void;
@@ -35,7 +27,6 @@ export function HomePage({ onNavigate }: HomePageProps) {
   const [mangas, setMangas] = useState<Manga[]>([]);
   const [chaptersByMangaId, setChaptersByMangaId] = useState<Record<string, Chapter[]>>({});
   const [history, setHistory] = useState<ReadingHistoryItem[]>([]);
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [selectedGenre, setSelectedGenre] = useState<string>('Todos');
   const [loading, setLoading] = useState(true);
 
@@ -69,40 +60,17 @@ export function HomePage({ onNavigate }: HomePageProps) {
   useEffect(() => {
     if (!user) {
       setHistory([]);
-      setFavorites([]);
       return;
     }
     fetchReadingHistoryForUser(user.uid)
       .then(setHistory)
       .catch(() => setHistory([]));
-    fetchUserFavorites(user.uid)
-      .then(setFavorites)
-      .catch(() => setFavorites([]));
   }, [user, deletedNotifsCount, releaseNotifsCount]);
 
   const featuredManga = useMemo(
     () => selectFeaturedManga(mangas, chaptersByMangaId),
     [mangas, chaptersByMangaId]
   );
-
-  const wishlistLaunchedMangas = useMemo(() => {
-    if (!user || favorites.length === 0 || mangas.length === 0) return [];
-    const favMap = new Map(favorites.map((f) => [f.mangaId, f]));
-    return mangas
-      .filter((m) => {
-        if (m.status !== 'ongoing' && m.status !== 'completed' && m.status !== 'hiatus') {
-          return false;
-        }
-        const fav = favMap.get(m.id);
-        if (!fav) return false;
-        return fav.addedDuringPreLaunch === true || m.launchedFromPreLaunch === true;
-      })
-      .sort(
-        (a, b) =>
-          (tsMillis(b.launchedAt) || tsMillis(b.lastChapterPublishedAt) || tsMillis(b.createdAt)) -
-          (tsMillis(a.launchedAt) || tsMillis(a.lastChapterPublishedAt) || tsMillis(a.createdAt))
-      );
-  }, [user, favorites, mangas]);
 
   const latestMangas = useMemo(
     () => selectLatestReleases(mangas, chaptersByMangaId, undefined, 10),
@@ -332,38 +300,6 @@ export function HomePage({ onNavigate }: HomePageProps) {
                   </button>
                 );
               })}
-            </div>
-          </section>
-        )}
-
-        {/* Wishlist Launched Highlight Section */}
-        {wishlistLaunchedMangas.length > 0 && (
-          <section className="space-y-5 rounded-2xl bg-gradient-to-br from-[#E11D48]/10 via-[#121216] to-[#111115] border border-[#E11D48]/25 p-5 sm:p-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <Heart className="w-5 h-5 text-[#E11D48] fill-[#E11D48]" />
-                <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
-                  Lançamento em Destaque — Da sua lista de favoritos
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigate({ name: 'library' })}
-                className="text-xs sm:text-sm text-zinc-300 hover:text-white inline-flex items-center gap-1 transition-colors"
-              >
-                Minha lista
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-5">
-              {wishlistLaunchedMangas.map((manga) => (
-                <MangaCard
-                  key={manga.id}
-                  manga={manga}
-                  subtitle="Lançado da sua lista de desejos"
-                  onSelect={(id) => onNavigate({ name: 'manga', mangaId: id })}
-                />
-              ))}
             </div>
           </section>
         )}

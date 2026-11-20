@@ -106,7 +106,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
             {mode === 'login' ? 'Entrar na MANGA MOTION' : 'Criar conta'}
           </h2>
           <p className="text-sm text-zinc-400">
-            Sincronize histórico de leitura, favoritos e publique obras em Motion Manga.
+            Sincronize histórico de leitura, autores seguidos e publique obras em Motion Manga.
           </p>
         </div>
 

@@ -43,8 +43,6 @@ function makeManga(overrides: Partial<Manga> = {}): Manga {
     chaptersCount: 1,
     viewsCount: 0,
     realViewsCount: 0,
-    favoritesCount: 0,
-    realFavoritesCount: 0,
     ratingAverage: 0,
     ratingCount: 0,
     realRatingAverage: 0,
@@ -147,8 +145,6 @@ test('3. Prioridade competitiva: em engajamento igual, obra Motion vence Tradici
   const baseParams = {
     realViewsCount: 150,
     viewsCount: 150,
-    realFavoritesCount: 18,
-    favoritesCount: 18,
     realRatingAverage: 4.6,
     realRatingCount: 10,
     ratingAverage: 4.6,
@@ -180,8 +176,6 @@ test('4. Engajamento verdadeiro prevalece: mangá Tradicional muito superior ult
     hasMotion: true,
     realViewsCount: 25,
     viewsCount: 25,
-    realFavoritesCount: 2,
-    favoritesCount: 2,
     realRatingAverage: 4.0,
     realRatingCount: 2,
     ratingAverage: 4.0,
@@ -193,8 +187,6 @@ test('4. Engajamento verdadeiro prevalece: mangá Tradicional muito superior ult
     hasMotion: false,
     realViewsCount: 3200,
     viewsCount: 3200,
-    realFavoritesCount: 340,
-    favoritesCount: 340,
     realRatingAverage: 4.9,
     realRatingCount: 85,
     ratingAverage: 4.9,
@@ -217,7 +209,7 @@ test('4. Engajamento verdadeiro prevalece: mangá Tradicional muito superior ult
   assert.ok(ranked[0].ranking.score > ranked[1].ranking.score + 20);
 });
 
-test('5. Engajamento real vs estimulado: estímulo máximo não vence engajamento real comprovado e não gera favoritos/notas fictícios', () => {
+test('5. Engajamento real vs estimulado: estímulo máximo não vence engajamento real comprovado e não gera notas fictícias', () => {
   const startedAtMs = 1_700_000_000_000;
   const nowMs = startedAtMs + 72 * 3600 * 1000;
 
@@ -226,17 +218,13 @@ test('5. Engajamento real vs estimulado: estímulo máximo não vence engajament
       id: 'stim-only',
       realViewsCount: 5,
       viewsCount: 5,
-      realFavoritesCount: 0,
-      favoritesCount: 0,
       stimulusWindows: [{ chapterId: 'ch-1', startedAtMs, budget: 1000, seed: 99, durationHours: 72 }],
     }),
     nowMs
   );
 
-  // Favoritos e notas reais preservados internamente; contador exibido soma reais + likes de incentivo
-  assert.equal(stimulatedOnly.realFavoritesCount, 0);
-  assert.ok((stimulatedOnly.stimulusLikesCount ?? 0) > 0);
-  assert.equal(stimulatedOnly.favoritesCount, stimulatedOnly.stimulusLikesCount);
+  // Views reais e notas reais preservados internamente
+  assert.equal(stimulatedOnly.realViewsCount, 5);
   assert.equal(stimulatedOnly.ratingCount, 0);
   assert.equal(stimulatedOnly.ratingAverage, 0);
   assert.equal(stimulatedOnly.stimulusViewsCount, 1000);
@@ -246,8 +234,6 @@ test('5. Engajamento real vs estimulado: estímulo máximo não vence engajament
       id: 'real-work',
       realViewsCount: 220,
       viewsCount: 220,
-      realFavoritesCount: 24,
-      favoritesCount: 24,
       realRatingAverage: 4.8,
       realRatingCount: 14,
       ratingAverage: 4.8,
@@ -258,12 +244,12 @@ test('5. Engajamento real vs estimulado: estímulo máximo não vence engajament
 
   const ranked = rankMangas([stimulatedOnly, realEngagementWork], {}, { nowMs });
   assert.equal(ranked[0].manga.id, 'real-work');
-  // trueEngagement de stimulatedOnly deve ser idêntico ao de 0 favoritos (ignora stimulusLikesCount em favoritesCount)
-  const baselineZeroFavs = computeMangaRankingScore(
-    { manga: { ...stimulatedOnly, favoritesCount: 0 } },
+  // trueEngagement de stimulatedOnly ignora stimulusViewsCount (baseado apenas em realViewsCount = 5)
+  const baselineOnlyRealViews = computeMangaRankingScore(
+    { manga: { ...stimulatedOnly, viewsCount: 5, stimulusViewsCount: 0 } },
     nowMs
   );
-  assert.equal(ranked[1].ranking.components.trueEngagement, baselineZeroFavs.components.trueEngagement);
+  assert.equal(ranked[1].ranking.components.trueEngagement, baselineOnlyRealViews.components.trueEngagement);
   assert.ok(
     ranked[1].ranking.components.stimulusDiscovery <=
       RANKING_CONSTANTS.MAX_STIMULUS_DISCOVERY_BONUS
@@ -322,8 +308,6 @@ test('8. Crescimento logarítmico de capítulos impede que obra antiga com 30 ca
     id: 'old-30-weak',
     realViewsCount: 60,
     viewsCount: 60,
-    realFavoritesCount: 1,
-    favoritesCount: 1,
   });
   const old30Chapters = Array.from({ length: 30 }, (_, idx) =>
     makeChapter({
@@ -338,8 +322,6 @@ test('8. Crescimento logarítmico de capítulos impede que obra antiga com 30 ca
     id: 'new-3-strong',
     realViewsCount: 450,
     viewsCount: 450,
-    realFavoritesCount: 38,
-    favoritesCount: 38,
     realRatingAverage: 4.8,
     realRatingCount: 16,
     ratingAverage: 4.8,
@@ -409,8 +391,6 @@ test('11. Tração recente classifica corretamente Em alta agora, Em ascensão, 
     id: 'em-alta',
     realViewsDayKey: todayKey,
     realViewsTodayCount: 28,
-    realFavsDayKey: todayKey,
-    realFavsTodayCount: 5,
     lastChapterPublishedAt: nowMs - 2 * 3600 * 1000,
   });
   const emAlta = computeRecentTraction(
@@ -425,8 +405,6 @@ test('11. Tração recente classifica corretamente Em alta agora, Em ascensão, 
     id: 'ascensao',
     realViewsDayKey: todayKey,
     realViewsTodayCount: 7,
-    realFavsDayKey: todayKey,
-    realFavsTodayCount: 1,
     lastChapterPublishedAt: nowMs - 400 * 3600 * 1000,
   });
   const ascensao = computeRecentTraction(
@@ -590,8 +568,6 @@ test('14. Seletores Featured e Popular respeitam status público e editorial', (
     status: 'ongoing',
     realViewsCount: 800,
     viewsCount: 800,
-    realFavoritesCount: 90,
-    favoritesCount: 90,
   });
 
   const featured = selectFeaturedManga([preLaunch, editorial, popularHit]);
@@ -606,14 +582,12 @@ test('15. Pré-lançamento recebe penalidade multiplicativa frente a obras já p
   const preLaunch = makeManga({
     id: 'pre-work',
     status: 'pre_launch',
-    realFavoritesCount: 15,
-    favoritesCount: 15,
+    realViewsCount: 30,
+    viewsCount: 30,
   });
   const published = makeManga({
     id: 'pub-work',
     status: 'ongoing',
-    realFavoritesCount: 15,
-    favoritesCount: 15,
     realViewsCount: 30,
     viewsCount: 30,
   });

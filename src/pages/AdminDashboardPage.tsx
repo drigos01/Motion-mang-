@@ -3,7 +3,6 @@ import {
   CheckCircle,
   Eye,
   Flag,
-  Heart,
   Server,
   Shield,
   Star,
@@ -29,7 +28,6 @@ import {
 } from '../services/mangaService';
 import { computeMangaRankingScore } from '../lib/ranking';
 import {
-  computeViewsLikesRatioPercent,
   DEFAULT_STIMULUS_SETTINGS,
   toMillisValue,
 } from '../lib/stimulus';
@@ -178,7 +176,7 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Orçamento único sorteado uma única vez por obra (1 a 1.000 views em 72h) com
                   funil progressivo entre capítulos públicos, preservação absoluta do engajamento
-                  real, sem seguidores, favoritos ou avaliações fictícias, e isolamento total da
+                  real, sem seguidores ou avaliações fictícias, e isolamento total da
                   monetização.
                 </p>
               </div>
@@ -348,13 +346,6 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
                     const totalViews = m.viewsCount || 0;
                     const realViews = m.realViewsCount ?? m.viewsCount ?? 0;
                     const stimulusViews = m.stimulusViewsCount ?? 0;
-                    const realFavorites = m.realFavoritesCount ?? m.favoritesCount ?? 0;
-                    const stimulusLikes = m.stimulusLikesCount ?? 0;
-                    const ratioPercent = computeViewsLikesRatioPercent(totalViews, realFavorites);
-                    const barWidth =
-                      totalViews > 0
-                        ? Math.min(100, Math.max(realFavorites > 0 ? 4 : 0, (realFavorites / totalViews) * 100))
-                        : 0;
                     const audit = computeMangaRankingScore(
                       { manga: m, chapters: m.publishedChapters },
                       Date.now()
@@ -392,17 +383,6 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
                             (<span className="text-emerald-400">{realViews.toLocaleString('pt-BR')} reais</span> ·{' '}
                             <span className="text-zinc-300">{stimulusViews.toLocaleString('pt-BR')} estímulo</span>)
                           </span>
-
-                          <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                            <Heart className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                            Favoritos Reais:{' '}
-                            <strong className="text-rose-400">{realFavorites.toLocaleString('pt-BR')}</strong>{' '}
-                            {stimulusLikes > 0 && (
-                              <span className="text-zinc-400">
-                                · Sinal estímulo interno: {stimulusLikes.toLocaleString('pt-BR')}
-                              </span>
-                            )}
-                          </span>
                         </div>
 
                         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] font-mono-tabular text-zinc-400">
@@ -418,8 +398,7 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
                           <span className="text-zinc-300">
                             24h:{' '}
                             <span className="text-emerald-400">
-                              +{audit.traction.recentRealViews24h} views reais / +
-                              {audit.traction.recentRealFavorites24h} favs
+                              +{audit.traction.recentRealViews24h} views reais
                             </span>{' '}
                             ·{' '}
                             <span className="text-amber-300">
@@ -496,21 +475,6 @@ export function AdminDashboardPage({ onNavigate }: AdminDashboardPageProps) {
                             )}
                           </div>
                         )}
-
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between gap-2 text-[10px] font-mono-tabular text-zinc-400">
-                            <span>Comparação Visualizações × Favoritos Reais</span>
-                            <span className="text-zinc-200 font-semibold">
-                              {totalViews.toLocaleString('pt-BR')} × {realFavorites.toLocaleString('pt-BR')} ({ratioPercent.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)
-                            </span>
-                          </div>
-                          <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-gradient-to-r from-[#E11D48] to-rose-400 transition-all duration-300"
-                              style={{ width: `${barWidth}%` }}
-                            />
-                          </div>
-                        </div>
                       </div>
                     );
                   })()}

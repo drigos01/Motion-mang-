@@ -6,21 +6,52 @@ import { ExploreSortOption, sortExploreMangas } from '../lib/ranking';
 import { fetchPublishedCatalogWithRankingData } from '../services/mangaService';
 import { AGE_RATINGS, Chapter, GENRE_OPTIONS, Manga } from '../types/manga';
 
+export interface ExploreFiltersState {
+  search: string;
+  genre: string;
+  format: 'all' | 'motion' | 'traditional';
+  ageRating: string;
+  sortBy: ExploreSortOption;
+}
+
 interface ExplorePageProps {
   initialGenre?: string;
   initialQuery?: string;
+  savedFilters?: ExploreFiltersState;
+  onFiltersChange?: (filters: ExploreFiltersState) => void;
   onNavigate: (route: AppRoute) => void;
 }
 
-export function ExplorePage({ initialGenre, initialQuery, onNavigate }: ExplorePageProps) {
+export function ExplorePage({
+  initialGenre,
+  initialQuery,
+  savedFilters,
+  onFiltersChange,
+  onNavigate,
+}: ExplorePageProps) {
   const [mangas, setMangas] = useState<Manga[]>([]);
   const [chaptersByMangaId, setChaptersByMangaId] = useState<Record<string, Chapter[]>>({});
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState(initialQuery || '');
-  const [genre, setGenre] = useState(initialGenre || 'Todos');
-  const [format, setFormat] = useState<'all' | 'motion' | 'traditional'>('all');
-  const [ageRating, setAgeRating] = useState<string>('Todas');
-  const [sortBy, setSortBy] = useState<ExploreSortOption>('relevance');
+  const [search, setSearch] = useState(savedFilters?.search ?? initialQuery ?? '');
+  const [genre, setGenre] = useState(savedFilters?.genre ?? initialGenre ?? 'Todos');
+  const [format, setFormat] = useState<'all' | 'motion' | 'traditional'>(
+    savedFilters?.format ?? 'all'
+  );
+  const [ageRating, setAgeRating] = useState<string>(savedFilters?.ageRating ?? 'Todas');
+  const [sortBy, setSortBy] = useState<ExploreSortOption>(savedFilters?.sortBy ?? 'relevance');
+
+  useEffect(() => {
+    if (savedFilters) return;
+    setSearch(initialQuery || '');
+    setGenre(initialGenre || 'Todos');
+    setFormat('all');
+    setAgeRating('Todas');
+    setSortBy('relevance');
+  }, [initialGenre, initialQuery, savedFilters]);
+
+  useEffect(() => {
+    onFiltersChange?.({ search, genre, format, ageRating, sortBy });
+  }, [search, genre, format, ageRating, sortBy, onFiltersChange]);
 
   useEffect(() => {
     setLoading(true);

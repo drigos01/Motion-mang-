@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Heart, History, Users } from 'lucide-react';
+import { BookOpen, History, Users } from 'lucide-react';
 import { AppRoute } from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchReadingHistoryForUser,
-  fetchUserFavorites,
   fetchUserFollows,
-  isMangaPubliclyAccessible,
 } from '../services/mangaService';
-import { FavoriteItem, FollowRelation, ReadingHistoryItem } from '../types/manga';
+import { FollowRelation, ReadingHistoryItem } from '../types/manga';
 
 interface LibraryPageProps {
   onNavigate: (route: AppRoute) => void;
@@ -17,8 +15,7 @@ interface LibraryPageProps {
 
 export function LibraryPage({ onNavigate, onOpenAuth }: LibraryPageProps) {
   const { user, notifications } = useAuth();
-  const [tab, setTab] = useState<'favorites' | 'history' | 'following'>('favorites');
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const [tab, setTab] = useState<'history' | 'following'>('history');
   const [history, setHistory] = useState<ReadingHistoryItem[]>([]);
   const [follows, setFollows] = useState<FollowRelation[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,12 +28,10 @@ export function LibraryPage({ onNavigate, onOpenAuth }: LibraryPageProps) {
     if (!user) return;
     setLoading(true);
     Promise.all([
-      fetchUserFavorites(user.uid),
       fetchReadingHistoryForUser(user.uid),
       fetchUserFollows(user.uid),
     ])
-      .then(([favs, hist, flw]) => {
-        setFavorites(favs);
+      .then(([hist, flw]) => {
         setHistory(hist);
         setFollows(flw);
       })
@@ -49,7 +44,7 @@ export function LibraryPage({ onNavigate, onOpenAuth }: LibraryPageProps) {
         <BookOpen className="w-10 h-10 text-[#E11D48] mx-auto" />
         <h1 className="font-display text-3xl font-bold text-white">Sua Biblioteca</h1>
         <p className="text-sm text-zinc-400">
-          Entre na sua conta para acompanhar seus mangás favoritos, histórico automático e autores
+          Entre na sua conta para acompanhar seu histórico automático de leitura e autores
           seguidos.
         </p>
         <button
@@ -71,16 +66,6 @@ export function LibraryPage({ onNavigate, onOpenAuth }: LibraryPageProps) {
         </h1>
 
         <div className="flex items-center gap-1 p-1 rounded-xl bg-[#111115] border border-white/8">
-          <button
-            type="button"
-            onClick={() => setTab('favorites')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              tab === 'favorites' ? 'bg-[#E11D48] text-white' : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            <Heart className="w-3.5 h-3.5" />
-            Favoritos ({favorites.length})
-          </button>
           <button
             type="button"
             onClick={() => setTab('history')}
@@ -106,53 +91,6 @@ export function LibraryPage({ onNavigate, onOpenAuth }: LibraryPageProps) {
 
       {loading ? (
         <p className="text-sm text-zinc-400 py-8">Carregando biblioteca...</p>
-      ) : tab === 'favorites' ? (
-        favorites.length === 0 ? (
-          <div className="bg-[#111115] border border-white/8 rounded-2xl p-10 text-center text-sm text-zinc-400">
-            Você ainda não favoritou nenhum mangá.
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {favorites.map((fav) => (
-              <button
-                key={fav.mangaId}
-                type="button"
-                onClick={async () => {
-                  if (fav.previewKey) {
-                    const accessible = await isMangaPubliclyAccessible(fav.mangaId);
-                    if (accessible) {
-                      onNavigate({ name: 'manga', mangaId: fav.mangaId });
-                    } else {
-                      onNavigate({ name: 'preview', previewKey: fav.previewKey });
-                    }
-                  } else {
-                    onNavigate({ name: 'manga', mangaId: fav.mangaId });
-                  }
-                }}
-                className="text-left group space-y-2"
-              >
-                <div className="aspect-[3/4] rounded-xl overflow-hidden bg-[#141419] border border-white/8">
-                  {fav.coverUrl ? (
-                    <img
-                      src={fav.coverUrl}
-                      alt={fav.mangaTitle}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-zinc-600">
-                      <BookOpen className="w-7 h-7" />
-                    </div>
-                  )}
-                </div>
-                <div className="font-display text-sm font-semibold text-white truncate">
-                  {fav.mangaTitle}
-                </div>
-                <div className="text-xs text-zinc-400 truncate">{fav.authorName}</div>
-              </button>
-            ))}
-          </div>
-        )
       ) : tab === 'history' ? (
         history.length === 0 ? (
           <div className="bg-[#111115] border border-white/8 rounded-2xl p-10 text-center text-sm text-zinc-400">

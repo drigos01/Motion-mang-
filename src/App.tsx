@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AuthModal } from './components/AuthModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppRoute, Navbar } from './components/Navbar';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 import { CreatorStudioPage } from './pages/CreatorStudioPage';
-import { ExplorePage } from './pages/ExplorePage';
+import { ExploreFiltersState, ExplorePage } from './pages/ExplorePage';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { MangaDetailPage } from './pages/MangaDetailPage';
@@ -13,9 +13,19 @@ import { ProfilePage } from './pages/ProfilePage';
 import { ReaderPage } from './pages/ReaderPage';
 import {
   fetchReadingHistoryForUser,
-  fetchUserFavorites,
   fetchUserFollows,
 } from './services/mangaService';
+
+function isOriginRoute(route: AppRoute): boolean {
+  return (
+    route.name === 'home' ||
+    route.name === 'explore' ||
+    route.name === 'library' ||
+    route.name === 'creator' ||
+    route.name === 'admin' ||
+    route.name === 'profile'
+  );
+}
 
 function parseHashRoute(): AppRoute {
   const raw = window.location.hash.replace(/^#\/?/, '');
@@ -67,7 +77,20 @@ function serializeHashRoute(route: AppRoute): string {
 function AppShell() {
   const { user, notifications } = useAuth();
   const [route, setRoute] = useState<AppRoute>(() => parseHashRoute());
+  const [mangaReturnRoute, setMangaReturnRoute] = useState<AppRoute>(() => {
+    const initial = parseHashRoute();
+    return isOriginRoute(initial) ? initial : { name: 'home' };
+  });
+  const [savedExploreFilters, setSavedExploreFilters] = useState<ExploreFiltersState | undefined>(
+    undefined
+  );
+  const [restoreExploreFilters, setRestoreExploreFilters] = useState(false);
+  const routeRef = useRef<AppRoute>(route);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+
+  useEffect(() => {
+    routeRef.current = route;
+  }, [route]);
 
   const mangaDeletedNotifCount = notifications.filter((n) => n.type === 'manga_deleted').length;
   const accountRemovedNotifCount = notifications.filter((n) => n.type === 'account_removed').length;
@@ -75,7 +98,6 @@ function AppShell() {
   useEffect(() => {
     if (!user?.emailVerified || mangaDeletedNotifCount === 0) return;
     void fetchReadingHistoryForUser(user.uid).catch(() => {});
-    void fetchUserFavorites(user.uid).catch(() => {});
   }, [user?.uid, user?.emailVerified, mangaDeletedNotifCount]);
 
   useEffect(() => {
@@ -83,18 +105,42 @@ function AppShell() {
     void fetchUserFollows(user.uid).catch(() => {});
   }, [user?.uid, user?.emailVerified, accountRemovedNotifCount]);
 
-  const navigate = (next: AppRoute) => {
-    setRoute(next);
-    const nextHash = serializeHashRoute(next);
-    if (window.location.hash !== nextHash) {
-      window.location.hash = nextHash;
-    }
-    const isReaderRoute = next.name === 'reader' || next.name === 'preview_reader';
-    window.scrollTo({ top: 0, behavior: isReaderRoute ? 'auto' : 'smooth' });
-  };
+  const navigate = useCallback(
+    (next: AppRoute, options?: { restoreExplore?: boolean }) => {
+      if (next.name === 'explore') {
+        if (options?.restoreExplore) {
+          setRestoreExploreFilters(true);
+        } else {
+          setRestoreExploreFilters(false);
+          setSavedExploreFilters(undefined);
+        }
+      }
+      if (isOriginRoute(next)) {
+        setMangaReturnRoute(next);
+      }
+      setRoute(next);
+      const nextHash = serializeHashRoute(next);
+      if (window.location.hash !== nextHash) {
+        window.location.hash = nextHash;
+      }
+      const isReaderRoute = next.name === 'reader' || next.name === 'preview_reader';
+      window.scrollTo({ top: 0, behavior: isReaderRoute ? 'auto' : 'smooth' });
+    },
+    []
+  );
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseHashRoute());
+    const onHashChange = () => {
+      const prev = routeRef.current;
+      const next = parseHashRoute();
+      if (next.name === 'explore') {
+        setRestoreExploreFilters(prev.name === 'manga' || prev.name === 'reader');
+      }
+      if (isOriginRoute(next)) {
+        setMangaReturnRoute(next);
+      }
+      setRoute(next);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -117,12 +163,20 @@ function AppShell() {
           <ExplorePage
             initialGenre={route.genre}
             initialQuery={route.query}
+            savedFilters={restoreExploreFilters ? savedExploreFilters : undefined}
+            onFiltersChange={setSavedExploreFilters}
             onNavigate={navigate}
           />
         )}
         {route.name === 'manga' && (
           <MangaDetailPage
             mangaId={route.mangaId}
+            returnRoute={mangaReturnRoute}
+            onReturn={() =>
+              navigate(mangaReturnRoute, {
+                restoreExplore: mangaReturnRoute.name === 'explore',
+              })
+            }
             onNavigate={navigate}
             onOpenAuth={() => setAuthModalOpen(true)}
           />

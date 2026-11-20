@@ -287,7 +287,6 @@ export function ReaderPage({
             hasMotion: pvRes.preview.hasMotion,
             chaptersCount: pvRes.preview.chaptersCount,
             viewsCount: 0,
-            favoritesCount: pvRes.preview.favoritesCount,
             ratingAverage: pvRes.preview.ratingAverage,
             ratingCount: pvRes.preview.ratingCount,
           };

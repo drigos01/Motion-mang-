@@ -117,18 +117,10 @@ export interface Manga {
   stimulusWindows?: StimulusWindow[];
   recentStimulusViews24h?: number;
   recentRealViews24h?: number;
-  recentRealFavorites24h?: number;
   realViewsDayKey?: string;
   realViewsTodayCount?: number;
   realViewsPrevDayKey?: string;
   realViewsPrevDayCount?: number;
-  realFavsDayKey?: string;
-  realFavsTodayCount?: number;
-  realFavsPrevDayKey?: string;
-  realFavsPrevDayCount?: number;
-  favoritesCount: number;
-  realFavoritesCount?: number;
-  stimulusLikesCount?: number;
   ratingAverage: number;
   ratingCount: number;
   realRatingAverage?: number;
@@ -212,17 +204,6 @@ export interface MangaRating {
   updatedAt?: unknown;
 }
 
-export interface FavoriteItem {
-  userId: string;
-  mangaId: string;
-  mangaTitle: string;
-  coverUrl: string;
-  authorName: string;
-  addedDuringPreLaunch?: boolean;
-  previewKey?: string;
-  createdAt?: unknown;
-}
-
 export interface ReadingHistoryItem {
   userId: string;
   mangaId: string;
@@ -290,7 +271,6 @@ export interface MangaPreview {
   status: MangaStatus;
   hasMotion: boolean;
   chaptersCount: number;
-  favoritesCount: number;
   ratingAverage: number;
   ratingCount: number;
   isActive: boolean;

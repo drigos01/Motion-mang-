@@ -3,11 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildNextDailyBucketPatch,
   computeMangaRecent24hStimulusViews,
-  computeMangaStimulusLikes,
   computeMangaStimulusViews,
   computeRecent24hFromDailyBuckets,
-  computeStimulusLikesForViews,
-  computeViewsLikesRatioPercent,
   distributeWorkStimulusAcrossChapters,
   enrichMangaWithViews,
   evaluateNewStimulusMilestones,
@@ -35,8 +32,6 @@ function buildBaseManga(overrides: Partial<Manga> = {}): Manga {
     chaptersCount: 1,
     viewsCount: 15,
     realViewsCount: 15,
-    favoritesCount: 2,
-    realFavoritesCount: 2,
     ratingAverage: 0,
     ratingCount: 0,
     ...overrides,
@@ -59,26 +54,7 @@ function buildChapter(overrides: Partial<Chapter> = {}): Chapter {
   };
 }
 
-test('1. Stimulus likes stay 0 below 12 views, stay small, and remain strictly separated from real favorites', () => {
-  for (let v = 0; v < 12; v++) {
-    assert.equal(computeStimulusLikesForViews(v, 424242, false), 0);
-    assert.equal(computeStimulusLikesForViews(v, 424242, true), 0);
-  }
-
-  for (const views of [20, 50, 120, 350, 750, 1000]) {
-    for (const seed of [1, 123, 55555, 987654]) {
-      const normalLikes = computeStimulusLikesForViews(views, seed, false);
-      const motionLikes = computeStimulusLikesForViews(views, seed, true);
-      assert.ok(normalLikes < views);
-      assert.ok(motionLikes < views);
-      assert.ok(motionLikes >= normalLikes);
-      assert.ok(normalLikes / views <= 0.055);
-      assert.ok(motionLikes / views <= 0.065);
-    }
-  }
-});
-
-test('2. Single work-level stimulus budget rolls within [1, 1000] and grows monotonically over 72h', () => {
+test('1. Single work-level stimulus budget rolls within [1, 1000] and grows monotonically over 72h', () => {
   for (let i = 0; i < 40; i++) {
     const picked = pickWorkStimulusBudgetAndSeed({
       minViews: 1,
@@ -104,33 +80,25 @@ test('2. Single work-level stimulus budget rolls within [1, 1000] and grows mono
   });
 
   let prevViews = -1;
-  let prevLikes = -1;
 
   for (let h = 0; h <= 72; h += 4) {
     const now = startedAtMs + h * 3600 * 1000;
     const views = computeMangaStimulusViews(manga, now);
-    const likes = computeMangaStimulusLikes(manga, now);
 
     assert.ok(views >= prevViews);
-    assert.ok(likes >= prevLikes);
-    assert.ok(likes <= Math.floor(views * 0.065));
 
     prevViews = views;
-    prevLikes = likes;
   }
 
   assert.equal(prevViews, 600);
-  assert.ok(prevLikes >= 15 && prevLikes <= 38);
 });
 
-test('3. enrichMangaWithViews keeps real favorites & real ratings untouched (zero fake favorites/ratings)', () => {
+test('2. enrichMangaWithViews keeps real views & real ratings untouched (zero fake ratings)', () => {
   const startedAtMs = 1_700_000_000_000;
   const raw = buildBaseManga({
     hasMotion: true,
     viewsCount: 25,
     realViewsCount: 25,
-    favoritesCount: 3,
-    realFavoritesCount: 3,
     ratingAverage: 4.8,
     ratingCount: 2,
     realRatingAverage: 4.8,
@@ -156,17 +124,13 @@ test('3. enrichMangaWithViews keeps real favorites & real ratings untouched (zer
   assert.equal(enrichedOnce.stimulusViewsCount, 400);
   assert.equal(enrichedOnce.viewsCount, 425);
 
-  // Display counter combines real + stimulus likes, while internal fields remain strictly separated
-  assert.equal(enrichedOnce.realFavoritesCount, 3);
-  assert.ok((enrichedOnce.stimulusLikesCount ?? 0) > 0);
-  assert.equal(enrichedOnce.favoritesCount, 3 + (enrichedOnce.stimulusLikesCount ?? 0));
   assert.equal(enrichedOnce.realRatingCount, 2);
   assert.equal(enrichedOnce.ratingCount, 2);
   assert.equal(enrichedOnce.realRatingAverage, 4.8);
   assert.equal(enrichedOnce.ratingAverage, 4.8);
 });
 
-test('4. Chapter stimulus funnel distributes original budget without creating new budgets, skips drafts, and lets real views prevail', () => {
+test('3. Chapter stimulus funnel distributes original budget without creating new budgets, skips drafts, and lets real views prevail', () => {
   const startedAtMs = 1_700_000_000_000;
   const now72h = startedAtMs + 72 * 3600 * 1000;
   const manga = buildBaseManga({
@@ -227,7 +191,7 @@ test('4. Chapter stimulus funnel distributes original budget without creating ne
   assert.equal(d3.viewsCount, 150 + (d3.stimulusViewsCount ?? 0));
 });
 
-test('5. UTC daily 24h buckets, 24h stimulus delta, and creator milestones operate deterministically', () => {
+test('4. UTC daily 24h buckets, 24h stimulus delta, and creator milestones operate deterministically', () => {
   const dayMs = Date.UTC(2026, 10, 18, 12, 0, 0);
   const todayKey = getUtcDayKey(dayMs);
   assert.equal(todayKey, '2026-11-18');
@@ -301,10 +265,9 @@ test('5. UTC daily 24h buckets, 24h stimulus delta, and creator milestones opera
     storage: storageAdapter,
   });
   assert.equal(secondMsg, null);
-  assert.equal(computeViewsLikesRatioPercent(500, 19), 3.8);
 });
 
-test('6. Legacy stimulusWindows[1..] are preserved for views and stimulus likes without altering real counts', () => {
+test('5. Legacy stimulusWindows[1..] are preserved for views without altering real counts', () => {
   const startedAtMs = 1_700_000_000_000;
   const nowAfterAll = startedAtMs + 120 * 3600 * 1000;
 
@@ -312,8 +275,6 @@ test('6. Legacy stimulusWindows[1..] are preserved for views and stimulus likes 
     id: 'legacy-multi-window',
     viewsCount: 10,
     realViewsCount: 10,
-    favoritesCount: 1,
-    realFavoritesCount: 1,
     stimulusSettledViews: 50,
     stimulusWindows: [
       {
@@ -340,8 +301,5 @@ test('6. Legacy stimulusWindows[1..] are preserved for views and stimulus likes 
   assert.equal(enriched.realViewsCount, 10);
   assert.equal(enriched.stimulusViewsCount, 365);
   assert.equal(enriched.viewsCount, 375);
-  assert.equal(enriched.realFavoritesCount, 1);
-  assert.ok((enriched.stimulusLikesCount ?? 0) >= 8);
-  assert.equal(enriched.favoritesCount, 1 + (enriched.stimulusLikesCount ?? 0));
 });
 

@@ -4,10 +4,10 @@ import {
   ArrowUp,
   Check,
   Copy,
+  Download,
   ExternalLink,
   Eye,
   Film,
-  Heart,
   Image as ImageIcon,
   Layers,
   Link2,
@@ -36,16 +36,15 @@ import {
   inspectMotionFileInBrowser,
   MotionInspectionResult,
 } from '../lib/motionValidation';
-import {
-  computeViewsLikesRatioPercent,
-  evaluateNewStimulusMilestones,
-} from '../lib/stimulus';
+import { evaluateNewStimulusMilestones } from '../lib/stimulus';
+import { downloadChapterPagesZip } from '../lib/zipArchive';
 import {
   addPageToChapter,
   createChapter,
   createManga,
   CreatorStudioCommentItem,
   CreatorStudioRatingItem,
+  deleteAllChapterPages,
   deleteChapterAndSync,
   deleteChapterPage,
   deleteManga,
@@ -143,6 +142,12 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   const [uploadingPage, setUploadingPage] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [publishingChapterId, setPublishingChapterId] = useState<string | null>(null);
+  const [downloadingPages, setDownloadingPages] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
+  const [downloadMotionPromptOpen, setDownloadMotionPromptOpen] = useState(false);
+  const [confirmDeleteAllPages, setConfirmDeleteAllPages] = useState(false);
+  const [deletingAllPages, setDeletingAllPages] = useState(false);
 
   // Private preview link management state
   const [previewSlugInput, setPreviewSlugInput] = useState('');
@@ -207,7 +212,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
 
   const studioOverview = useMemo(() => {
     const totalViews = mangas.reduce((sum, m) => sum + (m.viewsCount || 0), 0);
-    const totalFavorites = mangas.reduce((sum, m) => sum + (m.favoritesCount || 0), 0);
     const totalRatingsCount = mangas.reduce((sum, m) => sum + (m.ratingCount || 0), 0);
     const weightedScoreSum = mangas.reduce(
       (sum, m) => sum + (m.ratingAverage || 0) * (m.ratingCount || 0),
@@ -218,7 +222,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     const totalFollowers = Math.max(0, profile?.followersCount ?? 0);
     return {
       totalViews,
-      totalFavorites,
       totalRatingsCount,
       avgRating,
       totalVisibleComments,
@@ -302,6 +305,9 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     setMotionInspection(null);
     setMotionAlignment('center');
     setPendingMotionReplace(null);
+    setDownloadMotionPromptOpen(false);
+    setConfirmDeleteAllPages(false);
+    setDownloadProgress(null);
     if (selectedManga && selectedChapter) {
       void loadPages(selectedManga.id, selectedChapter.id);
     }
@@ -448,10 +454,12 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   };
 
   const handleToggleChapterPublish = async (ch: Chapter) => {
-    if (!selectedManga) return;
+    if (!selectedManga || publishingChapterId === ch.id) return;
     const nextStatus = ch.status === 'published' ? 'draft' : 'published';
     const wasPreLaunch = selectedManga.status === 'pre_launch';
     const isPrivateWork = selectedManga.status === 'draft';
+    setPublishingChapterId(ch.id);
+    setError(null);
     try {
       await updateChapterStatusAndSync({
         manga: selectedManga,
@@ -466,7 +474,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
       if (nextStatus === 'published') {
         if (wasPreLaunch) {
           setFeedback(
-            `Capítulo ${ch.chapterNumber} publicado! A obra saiu de Pré-lançamento para Lançada automaticamente e quem favoritou recebeu notificação.`
+            `Capítulo ${ch.chapterNumber} publicado! A obra saiu de Pré-lançamento para Lançada automaticamente e os seguidores foram notificados.`
           );
         } else if (isPrivateWork) {
           setFeedback(
@@ -480,6 +488,8 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao alterar status do capítulo.');
+    } finally {
+      setPublishingChapterId((prev) => (prev === ch.id ? null : prev));
     }
   };
 
@@ -809,6 +819,88 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     await loadPages(selectedManga.id, selectedChapter.id);
   };
 
+  const motionPagesCount = useMemo(
+    () => pages.filter((p) => Boolean(p.motionUrl)).length,
+    [pages]
+  );
+
+  const chapterOrMangaHasMotion = motionPagesCount > 0;
+
+  const handleDownloadChapterZip = async (includeMotion: boolean) => {
+    if (!selectedManga || !selectedChapter || pages.length === 0 || downloadingPages) return;
+    setDownloadingPages(true);
+    setDownloadMotionPromptOpen(false);
+    setError(null);
+    setFeedback(null);
+    try {
+      const result = await downloadChapterPagesZip({
+        mangaTitle: selectedManga.title,
+        chapterNumber: selectedChapter.chapterNumber,
+        pages,
+        includeMotion,
+        onProgress: ({ completed, total, currentFilename }) => {
+          setDownloadProgress(
+            `Preparando ZIP (${completed}/${total}): ${currentFilename}`
+          );
+        },
+      });
+      setFeedback(
+        `Download iniciado: ${result.zipFilename} (${result.filesCount} ${
+          result.filesCount === 1 ? 'arquivo' : 'arquivos'
+        }).`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível gerar o arquivo ZIP das páginas.'
+      );
+    } finally {
+      setDownloadingPages(false);
+      setDownloadProgress(null);
+    }
+  };
+
+  const handleStartDownloadAllPages = () => {
+    if (pages.length === 0 || downloadingPages || deletingAllPages) return;
+    setConfirmDeleteAllPages(false);
+    if (chapterOrMangaHasMotion) {
+      setDownloadMotionPromptOpen((prev) => !prev);
+      return;
+    }
+    void handleDownloadChapterZip(false);
+  };
+
+  const handleDeleteAllPages = async () => {
+    if (!selectedManga || !selectedChapter || pages.length === 0 || deletingAllPages) return;
+    const chapterSnapshot = selectedChapter;
+    const mangaId = selectedManga.id;
+    setDeletingAllPages(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      const removedCount = await deleteAllChapterPages(mangaId, chapterSnapshot.id);
+      setConfirmDeleteAllPages(false);
+      setDownloadMotionPromptOpen(false);
+      await loadPages(mangaId, chapterSnapshot.id);
+      await loadChapters(mangaId);
+      await loadCreatorWorks();
+      setFeedback(
+        `Todas as ${removedCount} ${
+          removedCount === 1 ? 'página' : 'páginas'
+        } do Capítulo ${chapterSnapshot.chapterNumber} foram excluídas.`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível excluir todas as páginas do capítulo.'
+      );
+    } finally {
+      setDeletingAllPages(false);
+    }
+  };
+
   if (!user) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-20 text-center space-y-5">
@@ -997,7 +1089,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           </button>
         </div>
 
-        <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
               <Eye className="w-3.5 h-3.5 text-zinc-500" />
@@ -1007,17 +1099,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
               {studioOverview.totalViews.toLocaleString('pt-BR')}
             </div>
             <div className="text-[11px] text-zinc-500">Nas {mangas.length} obras</div>
-          </div>
-
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-              <Heart className="w-3.5 h-3.5 text-rose-400" />
-              Favoritos
-            </div>
-            <div className="font-mono-tabular text-lg font-bold text-white">
-              {studioOverview.totalFavorites.toLocaleString('pt-BR')}
-            </div>
-            <div className="text-[11px] text-zinc-500">Leitores salvos</div>
           </div>
 
           <div className="space-y-1">
@@ -1140,7 +1221,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                 className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
               >
                 <option value="draft">Privado (Padrão — Só você vê no Estúdio)</option>
-                <option value="pre_launch">Pré-lançamento (Capa e Sinopse p/ Favoritos)</option>
+                <option value="pre_launch">Pré-lançamento (Capa e Sinopse visíveis)</option>
                 <option value="ongoing">Lançado (Público no catálogo)</option>
                 <option value="completed">Concluído (Público)</option>
                 <option value="hiatus">Hiato (Público)</option>
@@ -1381,10 +1462,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                               <Eye className="w-3 h-3 text-zinc-500" />
                               {(m.viewsCount || 0).toLocaleString('pt-BR')}
                             </span>
-                            <span className="inline-flex items-center gap-1" title="Favoritos">
-                              <Heart className="w-3 h-3 text-rose-400" />
-                              {(m.favoritesCount || 0).toLocaleString('pt-BR')}
-                            </span>
                             <span className="inline-flex items-center gap-1" title="Avaliação">
                               <Star className="w-3 h-3 text-amber-400" />
                               {m.ratingCount > 0 ? m.ratingAverage.toFixed(1) : '—'} (
@@ -1504,7 +1581,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                       ? {
                           label: 'Pré-lançamento',
                           badgeClass: 'bg-amber-400/15 text-amber-300 border-amber-400/30',
-                          hint: 'Capa e sinopse visíveis no catálogo para leitores adicionarem à Lista de Desejos. Ao publicar o primeiro capítulo, a obra será lançada automaticamente.',
+                          hint: 'Capa e sinopse visíveis no catálogo antes do lançamento oficial. Ao publicar o primeiro capítulo, a obra será lançada automaticamente.',
                         }
                       : selectedManga.status === 'hiatus'
                         ? {
@@ -1691,25 +1768,13 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                 {/* Selected Work Performance Strip */}
                 {(() => {
                   const totalViews = selectedManga.viewsCount || 0;
-                  const totalLikes = selectedManga.favoritesCount || 0;
-                  const likesRatio = computeViewsLikesRatioPercent(totalViews, totalLikes);
-                  const barWidth =
-                    totalViews > 0
-                      ? Math.min(100, Math.max(totalLikes > 0 ? 4 : 0, (totalLikes / totalViews) * 100))
-                      : 0;
                   return (
-                    <div className="px-3.5 py-3 rounded-xl bg-[#0B0B0E] border border-white/8 space-y-3">
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div className="px-3.5 py-3 rounded-xl bg-[#0B0B0E] border border-white/8">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <div>
                           <div className="text-[11px] text-zinc-400">Visualizações</div>
                           <div className="font-mono-tabular text-sm font-bold text-white mt-0.5">
                             {totalViews.toLocaleString('pt-BR')}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] text-zinc-400">Likes / Favoritos</div>
-                          <div className="font-mono-tabular text-sm font-bold text-rose-400 mt-0.5">
-                            {totalLikes.toLocaleString('pt-BR')}
                           </div>
                         </div>
                         <div>
@@ -1731,36 +1796,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                           <div className="font-mono-tabular text-sm font-bold text-emerald-400 mt-0.5">
                             {formatBRL(selectedWorkPerformance?.artistShareCents ?? 0)}
                           </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-2.5 border-t border-white/6 space-y-1.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono-tabular">
-                          <span className="text-zinc-400">Visualizações × Likes</span>
-                          <span className="inline-flex items-center gap-2 text-zinc-300">
-                            <span className="inline-flex items-center gap-1">
-                              <Eye className="w-3 h-3 text-zinc-400" />
-                              {totalViews.toLocaleString('pt-BR')}
-                            </span>
-                            <span className="text-zinc-600">×</span>
-                            <span className="inline-flex items-center gap-1 text-rose-400">
-                              <Heart className="w-3 h-3" />
-                              {totalLikes.toLocaleString('pt-BR')}
-                            </span>
-                            <span className="px-1.5 py-0.5 rounded bg-white/6 text-zinc-200 font-semibold">
-                              {likesRatio.toLocaleString('pt-BR', {
-                                minimumFractionDigits: 1,
-                                maximumFractionDigits: 1,
-                              })}
-                              %
-                            </span>
-                          </span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-[#E11D48] to-rose-400 transition-all duration-300"
-                            style={{ width: `${barWidth}%` }}
-                          />
                         </div>
                       </div>
                     </div>
@@ -1874,9 +1909,14 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                               <button
                                 type="button"
                                 onClick={() => handleToggleChapterPublish(ch)}
-                                className="min-h-[34px] px-3 py-1.5 rounded-lg text-xs font-medium bg-white/8 hover:bg-white/15 text-zinc-200 transition-colors whitespace-nowrap"
+                                disabled={publishingChapterId === ch.id}
+                                className="min-h-[34px] px-3 py-1.5 rounded-lg text-xs font-medium bg-white/8 hover:bg-white/15 text-zinc-200 transition-colors whitespace-nowrap disabled:opacity-50"
                               >
-                                {ch.status === 'published' ? 'Despublicar' : 'Publicar'}
+                                {publishingChapterId === ch.id
+                                  ? 'Salvando...'
+                                  : ch.status === 'published'
+                                    ? 'Despublicar'
+                                    : 'Publicar'}
                               </button>
                               {ch.pagesCount > 0 && (
                                 <button
@@ -1975,31 +2015,147 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                       </p>
                     </div>
 
-                    <label
-                      className={`min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/8 text-xs font-medium text-white ${
-                        uploadingPage
-                          ? 'opacity-50 cursor-not-allowed'
-                          : 'hover:bg-white/15 cursor-pointer'
-                      }`}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingPage && bulkProgress
-                        ? 'Enviando lote...'
-                        : 'Envio em Lote (Originais)'}
-                      <input
-                        type="file"
-                        multiple
-                        disabled={uploadingPage}
-                        accept="image/jpeg,image/png,image/webp"
-                        className="hidden"
-                        onChange={(e) => {
-                          const files = e.target.files;
-                          void handleBulkOriginalUpload(files);
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {pages.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={downloadingPages || deletingAllPages || uploadingPage}
+                            onClick={handleStartDownloadAllPages}
+                            className="min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/8 hover:bg-white/15 text-xs font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            {downloadingPages
+                              ? 'Baixando...'
+                              : `Baixar Todas (${pages.length})`}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={deletingAllPages || downloadingPages || uploadingPage}
+                            onClick={() => {
+                              setDownloadMotionPromptOpen(false);
+                              setConfirmDeleteAllPages((prev) => !prev);
+                            }}
+                            className="min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-rose-500/12 hover:bg-rose-500/20 border border-rose-500/25 text-xs font-medium text-rose-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            {deletingAllPages ? 'Excluindo...' : 'Excluir Todas'}
+                          </button>
+                        </>
+                      )}
+
+                      <label
+                        className={`min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/8 text-xs font-medium text-white ${
+                          uploadingPage || deletingAllPages
+                            ? 'opacity-50 cursor-not-allowed'
+                            : 'hover:bg-white/15 cursor-pointer'
+                        }`}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        {uploadingPage && bulkProgress
+                          ? 'Enviando lote...'
+                          : 'Envio em Lote (Originais)'}
+                        <input
+                          type="file"
+                          multiple
+                          disabled={uploadingPage || deletingAllPages}
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const files = e.target.files;
+                            void handleBulkOriginalUpload(files);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
                   </div>
+
+                  {downloadMotionPromptOpen && chapterOrMangaHasMotion && (
+                    <div className="p-3.5 rounded-xl bg-[#181822] border border-white/12 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                          <Film className="w-3.5 h-3.5 text-[#E11D48]" />
+                          Este capítulo possui páginas com Motion ({motionPagesCount})
+                        </div>
+                        <p className="text-[11px] text-zinc-400">
+                          Escolha se deseja baixar apenas as imagens normais ou incluir também os
+                          arquivos Motion no pacote .zip.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={downloadingPages}
+                          onClick={() => void handleDownloadChapterZip(false)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                        >
+                          <ImageIcon className="w-3.5 h-3.5" />
+                          Somente Normais ({pages.length})
+                        </button>
+                        <button
+                          type="button"
+                          disabled={downloadingPages}
+                          onClick={() => void handleDownloadChapterZip(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-xs font-semibold text-white disabled:opacity-50"
+                        >
+                          <Film className="w-3.5 h-3.5" />
+                          Normais + Motion ({pages.length + motionPagesCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDownloadMotionPromptOpen(false)}
+                          className="px-2.5 py-2 rounded-lg text-xs text-zinc-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {confirmDeleteAllPages && pages.length > 0 && (
+                    <div className="p-3.5 rounded-xl bg-rose-950/35 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-semibold text-rose-200">
+                          Excluir todas as {pages.length}{' '}
+                          {pages.length === 1 ? 'página' : 'páginas'} deste capítulo?
+                        </div>
+                        <p className="text-[11px] text-rose-200/75">
+                          Essa ação remove permanentemente todas as imagens originais
+                          {motionPagesCount > 0
+                            ? ` e ${motionPagesCount} arquivo(s) Motion vinculados`
+                            : ''}{' '}
+                          do Capítulo {selectedChapter.chapterNumber}.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={deletingAllPages}
+                          onClick={() => void handleDeleteAllPages()}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white disabled:opacity-50"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {deletingAllPages ? 'Excluindo tudo...' : 'Confirmar Exclusão'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingAllPages}
+                          onClick={() => setConfirmDeleteAllPages(false)}
+                          className="px-3 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs text-zinc-200 disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {downloadProgress && (
+                    <div className="p-3 rounded-xl bg-[#181822] border border-white/10 text-xs font-mono-tabular text-zinc-200 truncate">
+                      {downloadProgress}
+                    </div>
+                  )}
 
                   {bulkProgress && (
                     <div className="p-3 rounded-xl bg-[#181822] border border-white/10 space-y-2">

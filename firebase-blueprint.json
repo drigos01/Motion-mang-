@@ -70,7 +70,6 @@
         "hasMotion": { "type": "boolean" },
         "chaptersCount": { "type": "number" },
         "viewsCount": { "type": "number" },
-        "favoritesCount": { "type": "number" },
         "ratingAverage": { "type": "number" },
         "ratingCount": { "type": "number" },
         "stimulusSettledViews": { "type": "number" },
@@ -79,10 +78,6 @@
         "realViewsTodayCount": { "type": "number" },
         "realViewsPrevDayKey": { "type": "string", "maxLength": 12 },
         "realViewsPrevDayCount": { "type": "number" },
-        "realFavsDayKey": { "type": "string", "maxLength": 12 },
-        "realFavsTodayCount": { "type": "number" },
-        "realFavsPrevDayKey": { "type": "string", "maxLength": 12 },
-        "realFavsPrevDayCount": { "type": "number" },
         "lastChapterPublishedAt": { "type": "string", "format": "date-time" },
         "launchedAt": { "type": "string", "format": "date-time" },
         "launchedFromPreLaunch": { "type": "boolean" },
@@ -93,7 +88,7 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "authorId", "authorName", "title", "slug", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "moderationStatus", "isFeatured", "hasMotion", "chaptersCount", "viewsCount", "favoritesCount", "ratingAverage", "ratingCount", "createdAt", "updatedAt"]
+      "required": ["id", "authorId", "authorName", "title", "slug", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "moderationStatus", "isFeatured", "hasMotion", "chaptersCount", "viewsCount", "ratingAverage", "ratingCount", "createdAt", "updatedAt"]
     },
     "Chapter": {
       "title": "Chapter",
@@ -174,22 +169,6 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "mangaId", "score", "review", "userName", "createdAt", "updatedAt"]
-    },
-    "Favorite": {
-      "title": "Favorite",
-      "description": "User bookmarked/favorite manga.",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "mangaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "mangaTitle": { "type": "string", "minLength": 1, "maxLength": 140 },
-        "coverUrl": { "type": "string", "maxLength": 600 },
-        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "addedDuringPreLaunch": { "type": "boolean" },
-        "previewKey": { "type": "string", "maxLength": 128 },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "mangaId", "mangaTitle", "coverUrl", "authorName", "createdAt"]
     },
     "ReadingHistory": {
       "title": "ReadingHistory",
@@ -492,14 +471,13 @@
         "status": { "type": "string", "enum": ["draft", "pre_launch", "ongoing", "completed", "hiatus", "archived"] },
         "hasMotion": { "type": "boolean" },
         "chaptersCount": { "type": "number" },
-        "favoritesCount": { "type": "number" },
         "ratingAverage": { "type": "number" },
         "ratingCount": { "type": "number" },
         "isActive": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["previewKey", "previewSlug", "mangaId", "authorName", "title", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "hasMotion", "chaptersCount", "favoritesCount", "ratingAverage", "ratingCount", "isActive", "createdAt", "updatedAt"]
+      "required": ["previewKey", "previewSlug", "mangaId", "authorName", "title", "synopsis", "coverUrl", "bannerUrl", "genres", "ageRating", "status", "hasMotion", "chaptersCount", "ratingAverage", "ratingCount", "isActive", "createdAt", "updatedAt"]
     },
     "MangaPreviewChapter": {
       "title": "MangaPreviewChapter",
@@ -591,10 +569,6 @@
     "/manga_previews/{previewKey}/chapters/{chapterId}/pages/{pageId}": {
       "schema": { "$ref": "#/entities/MangaPreviewPage" },
       "description": "Pages of prepared chapters available through an active private preview link."
-    },
-    "/users/{userId}/favorites/{mangaId}": {
-      "schema": { "$ref": "#/entities/Favorite" },
-      "description": "User favorite mangas."
     },
     "/users/{userId}/history/{mangaId}": {
       "schema": { "$ref": "#/entities/ReadingHistory" },
