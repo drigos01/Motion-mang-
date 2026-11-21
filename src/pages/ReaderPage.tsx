@@ -138,7 +138,7 @@ export function ReaderPage({
   onOpenAuth,
 }: ReaderPageProps) {
   const isPreviewMode = Boolean(previewKey);
-  const { user, profile, privateInfo, isAdmin, updateReaderPreferences } = useAuth();
+  const { user, loading: authLoading, profile, privateInfo, isAdmin, updateReaderPreferences } = useAuth();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -305,6 +305,19 @@ export function ReaderPage({
 
   // Load manga, isolated chapter, isolated pages, comments, and auto-resume position
   useEffect(() => {
+    if (!previewKey && authLoading) {
+      return;
+    }
+    if (!previewKey && !user) {
+      setManga(null);
+      setChapters([]);
+      setChapter(null);
+      setPages([]);
+      setComments([]);
+      setLoading(false);
+      return;
+    }
+
     let active = true;
     setLoading(true);
     setToastMsg(null);
@@ -461,7 +474,7 @@ export function ReaderPage({
     return () => {
       active = false;
     };
-  }, [mangaId, previewKey, chapterId, initialPage, user?.uid, isAdmin]);
+  }, [mangaId, previewKey, chapterId, initialPage, user?.uid, authLoading, isAdmin]);
 
   // Dismiss toast automatically
   useEffect(() => {
@@ -1125,6 +1138,43 @@ export function ReaderPage({
       </div>
     );
   };
+
+  if (!isPreviewMode && authLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center text-zinc-400 text-sm">
+        Verificando acesso...
+      </div>
+    );
+  }
+
+  if (!isPreviewMode && !user) {
+    return (
+      <div className="min-h-screen bg-[#08080A] flex flex-col items-center justify-center p-6 text-center space-y-4">
+        <p className="font-display text-xl text-white">Login obrigatório para ler</p>
+        <p className="text-sm text-zinc-400 max-w-md">
+          Você precisa estar logado em uma conta para acessar a página de leitura.
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onOpenAuth}
+            className="px-5 py-2.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-sm font-semibold transition-colors"
+          >
+            Entrar ou Criar conta
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              mangaId ? onNavigate({ name: 'manga', mangaId }) : onNavigate({ name: 'home' })
+            }
+            className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-zinc-200 hover:bg-white/10 text-sm font-semibold transition-colors"
+          >
+            Voltar
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

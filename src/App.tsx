@@ -75,7 +75,7 @@ function serializeHashRoute(route: AppRoute): string {
 }
 
 function AppShell() {
-  const { user, notifications } = useAuth();
+  const { user, loading: authLoading, notifications } = useAuth();
   const [route, setRoute] = useState<AppRoute>(() => parseHashRoute());
   const [mangaReturnRoute, setMangaReturnRoute] = useState<AppRoute>(() => {
     const initial = parseHashRoute();
@@ -86,11 +86,26 @@ function AppShell() {
   );
   const [restoreExploreFilters, setRestoreExploreFilters] = useState(false);
   const routeRef = useRef<AppRoute>(route);
+  const authStateRef = useRef({ user, authLoading });
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authPromptReason, setAuthPromptReason] = useState<string | null>(null);
+  const [pendingReaderRoute, setPendingReaderRoute] = useState<AppRoute | null>(null);
 
   useEffect(() => {
     routeRef.current = route;
   }, [route]);
+
+  useEffect(() => {
+    authStateRef.current = { user, authLoading };
+  }, [user, authLoading]);
+
+  const openAuthModal = useCallback((reason: string | null = null) => {
+    setAuthPromptReason(reason);
+    if (!reason) {
+      setPendingReaderRoute(null);
+    }
+    setAuthModalOpen(true);
+  }, []);
 
   const mangaDeletedNotifCount = notifications.filter((n) => n.type === 'manga_deleted').length;
   const accountRemovedNotifCount = notifications.filter((n) => n.type === 'account_removed').length;
@@ -107,6 +122,12 @@ function AppShell() {
 
   const navigate = useCallback(
     (next: AppRoute, options?: { restoreExplore?: boolean }) => {
+      if (next.name === 'reader' && !user) {
+        if (authLoading) return;
+        setPendingReaderRoute(next);
+        openAuthModal('Você precisa estar logado em uma conta para ler os capítulos.');
+        return;
+      }
       if (next.name === 'explore') {
         if (options?.restoreExplore) {
           setRestoreExploreFilters(true);
@@ -126,13 +147,55 @@ function AppShell() {
       const isReaderRoute = next.name === 'reader' || next.name === 'preview_reader';
       window.scrollTo({ top: 0, behavior: isReaderRoute ? 'auto' : 'smooth' });
     },
-    []
+    [user, authLoading, openAuthModal]
   );
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user && route.name === 'reader') {
+      setPendingReaderRoute(route);
+      openAuthModal('Você precisa estar logado em uma conta para ler os capítulos.');
+      const fallback: AppRoute = { name: 'manga', mangaId: route.mangaId };
+      setRoute(fallback);
+      const fallbackHash = serializeHashRoute(fallback);
+      if (window.location.hash !== fallbackHash) {
+        window.location.hash = fallbackHash;
+      }
+      return;
+    }
+    if (user && pendingReaderRoute) {
+      const target = pendingReaderRoute;
+      setPendingReaderRoute(null);
+      setAuthPromptReason(null);
+      setAuthModalOpen(false);
+      setRoute(target);
+      const nextHash = serializeHashRoute(target);
+      if (window.location.hash !== nextHash) {
+        window.location.hash = nextHash;
+      }
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, [authLoading, user, route, pendingReaderRoute, openAuthModal]);
 
   useEffect(() => {
     const onHashChange = () => {
       const prev = routeRef.current;
       const next = parseHashRoute();
+      if (
+        next.name === 'reader' &&
+        !authStateRef.current.authLoading &&
+        !authStateRef.current.user
+      ) {
+        setPendingReaderRoute(next);
+        openAuthModal('Você precisa estar logado em uma conta para ler os capítulos.');
+        const fallback: AppRoute = { name: 'manga', mangaId: next.mangaId };
+        setRoute(fallback);
+        const fallbackHash = serializeHashRoute(fallback);
+        if (window.location.hash !== fallbackHash) {
+          window.location.hash = fallbackHash;
+        }
+        return;
+      }
       if (next.name === 'explore') {
         setRestoreExploreFilters(prev.name === 'manga' || prev.name === 'reader');
       }
@@ -143,7 +206,7 @@ function AppShell() {
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [openAuthModal]);
 
   const isReader = route.name === 'reader' || route.name === 'preview_reader';
 
@@ -153,7 +216,7 @@ function AppShell() {
         <Navbar
           route={route}
           onNavigate={navigate}
-          onOpenAuth={() => setAuthModalOpen(true)}
+          onOpenAuth={() => openAuthModal(null)}
         />
       )}
 
@@ -178,49 +241,54 @@ function AppShell() {
               })
             }
             onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={() => openAuthModal(null)}
           />
         )}
         {route.name === 'preview' && (
           <MangaDetailPage
             previewKey={route.previewKey}
             onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={() => openAuthModal(null)}
           />
         )}
-        {route.name === 'reader' && (
-          <ReaderPage
-            mangaId={route.mangaId}
-            chapterId={route.chapterId}
-            initialPage={route.initialPage}
-            initialCommentsOpen={route.openComments}
-            onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
-          />
-        )}
+        {route.name === 'reader' &&
+          (authLoading ? (
+            <div className="min-h-screen bg-black flex items-center justify-center text-zinc-400 text-sm">
+              Verificando acesso...
+            </div>
+          ) : user ? (
+            <ReaderPage
+              mangaId={route.mangaId}
+              chapterId={route.chapterId}
+              initialPage={route.initialPage}
+              initialCommentsOpen={route.openComments}
+              onNavigate={navigate}
+              onOpenAuth={() => openAuthModal(null)}
+            />
+          ) : null)}
         {route.name === 'preview_reader' && (
           <ReaderPage
             previewKey={route.previewKey}
             chapterId={route.chapterId}
             initialPage={route.initialPage}
             onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={() => openAuthModal(null)}
           />
         )}
         {route.name === 'creator' && (
           <CreatorStudioPage
             onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={() => openAuthModal(null)}
           />
         )}
         {route.name === 'library' && (
           <LibraryPage
             onNavigate={navigate}
-            onOpenAuth={() => setAuthModalOpen(true)}
+            onOpenAuth={() => openAuthModal(null)}
           />
         )}
         {route.name === 'profile' && (
-          <ProfilePage onOpenAuth={() => setAuthModalOpen(true)} onNavigate={navigate} />
+          <ProfilePage onOpenAuth={() => openAuthModal(null)} onNavigate={navigate} />
         )}
         {route.name === 'admin' && <AdminDashboardPage onNavigate={navigate} />}
       </main>
@@ -249,7 +317,15 @@ function AppShell() {
         </footer>
       )}
 
-      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      <AuthModal
+        isOpen={authModalOpen}
+        reasonMessage={authPromptReason}
+        onClose={() => {
+          setAuthModalOpen(false);
+          setAuthPromptReason(null);
+          setPendingReaderRoute(null);
+        }}
+      />
     </div>
   );
 }

@@ -80,6 +80,8 @@ function sanitizeHandle(name: string, uid: string): string {
   return `${base || 'leitor'}_${suffix}`.slice(0, MAX_LIMITS.HANDLE);
 }
 
+const PENDING_ACCOUNT_TYPE_PREFIX = 'mm_pending_account_type_';
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -101,7 +103,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const run = async () => {
       const userRef = doc(db, 'users', firebaseUser.uid);
       const privRef = doc(db, 'users', firebaseUser.uid, 'private', 'info');
-      const resolvedAccountType = preferredAccountType ?? pendingAccountTypeRef.current;
+      let storedAccountType: AccountType | undefined;
+      try {
+        const raw = localStorage.getItem(`${PENDING_ACCOUNT_TYPE_PREFIX}${firebaseUser.uid}`);
+        if (raw === 'reader' || raw === 'creator') {
+          storedAccountType = raw;
+        }
+      } catch {
+        // ignore storage errors
+      }
+      const resolvedAccountType =
+        preferredAccountType ?? pendingAccountTypeRef.current ?? storedAccountType;
 
       try {
         const snap = await getDoc(userRef);
@@ -127,6 +139,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             updatedAt: serverTimestamp(),
           };
           await setDoc(userRef, newProfile);
+        }
+        try {
+          localStorage.removeItem(`${PENDING_ACCOUNT_TYPE_PREFIX}${firebaseUser.uid}`);
+        } catch {
+          // ignore storage errors
         }
 
         const privSnap = await getDoc(privRef);
@@ -295,15 +312,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     pendingAccountTypeRef.current = params.accountType;
     try {
       const cred = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
-      await updateProfile(cred.user, {
-        displayName: params.displayName.trim().slice(0, MAX_LIMITS.DISPLAY_NAME),
-      });
-      if (!cred.user.emailVerified) {
-        await sendEmailVerification(cred.user);
-        return { needsVerification: true };
+      try {
+        try {
+          localStorage.setItem(`${PENDING_ACCOUNT_TYPE_PREFIX}${cred.user.uid}`, params.accountType);
+        } catch {
+          // ignore storage errors
+        }
+        await updateProfile(cred.user, {
+          displayName: params.displayName.trim().slice(0, MAX_LIMITS.DISPLAY_NAME),
+        });
+        const needsVerification = !cred.user.emailVerified;
+        if (needsVerification) {
+          await sendEmailVerification(cred.user);
+        } else {
+          await ensureUserDocuments(cred.user, params.accountType);
+        }
+        return { needsVerification };
+      } finally {
+        await firebaseSignOut(auth).catch(() => {});
       }
-      await ensureUserDocuments(cred.user, params.accountType);
-      return { needsVerification: false };
     } finally {
       pendingAccountTypeRef.current = undefined;
     }

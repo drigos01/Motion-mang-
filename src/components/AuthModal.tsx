@@ -1,25 +1,58 @@
-import React, { useState } from 'react';
-import { AlertCircle, CheckCircle2, Mail, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Mail, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AccountType } from '../types/manga';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
+  reasonMessage?: string | null;
 }
 
-export function AuthModal({ isOpen, onClose }: AuthModalProps) {
+export function AuthModal({ isOpen, onClose, reasonMessage }: AuthModalProps) {
   const { signInWithGoogle, signInWithEmail, registerWithEmail } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [accountType, setAccountType] = useState<AccountType>('reader');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setPassword('');
+      setConfirmPassword('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setError(null);
+      setInfoMessage(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const passwordsMismatch =
+    mode === 'register' && confirmPassword.length > 0 && password !== confirmPassword;
+  const passwordsMatch =
+    mode === 'register' &&
+    confirmPassword.length > 0 &&
+    password.length >= 6 &&
+    password === confirmPassword;
+
+  const switchMode = (nextMode: 'login' | 'register') => {
+    setMode(nextMode);
+    setError(null);
+    setInfoMessage(null);
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+  };
 
   const handleGoogle = async () => {
     setError(null);
@@ -55,14 +88,28 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
           setBusy(false);
           return;
         }
-        const res = await registerWithEmail({ email, password, displayName, accountType });
-        if (res.needsVerification) {
-          setInfoMessage(
-            'Conta criada! Enviamos um link de confirmação para o seu e-mail. Confirme seu e-mail para liberar publicações e comentários.'
-          );
-        } else {
-          onClose();
+        if (password.length < 6) {
+          setError('A senha deve ter pelo menos 6 caracteres.');
+          setBusy(false);
+          return;
         }
+        if (password !== confirmPassword) {
+          setError('As senhas não coincidem. Digite a mesma senha nas duas caixas.');
+          setBusy(false);
+          return;
+        }
+        const res = await registerWithEmail({ email, password, displayName, accountType });
+        setMode('login');
+        setPassword('');
+        setConfirmPassword('');
+        setShowPassword(false);
+        setShowConfirmPassword(false);
+        setDisplayName('');
+        setInfoMessage(
+          res.needsVerification
+            ? 'Conta criada com sucesso! Enviamos um link de confirmação para o seu e-mail. Confirme seu e-mail e faça login.'
+            : 'Conta criada com sucesso! Faça login para continuar.'
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Erro na autenticação.';
@@ -91,7 +138,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       aria-modal="true"
       aria-labelledby="auth-modal-title"
     >
-      <div className="relative w-full max-w-md bg-[#121216] border border-white/12 rounded-2xl p-6 sm:p-8 shadow-2xl">
+      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto bg-[#121216] border border-white/12 rounded-2xl p-6 sm:p-8 shadow-2xl">
         <button
           type="button"
           onClick={onClose}
@@ -101,7 +148,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
           <X className="w-5 h-5" />
         </button>
 
-        <div className="space-y-1.5 mb-6">
+        <div className="space-y-1.5 mb-4">
           <h2 id="auth-modal-title" className="font-display text-2xl font-bold text-white">
             {mode === 'login' ? 'Entrar na MANGA MOTION' : 'Criar conta'}
           </h2>
@@ -109,6 +156,47 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
             Sincronize histórico de leitura, autores seguidos e publique obras em Motion Manga.
           </p>
         </div>
+
+        {/* Mode Tabs */}
+        <div
+          role="tablist"
+          aria-label="Modo de acesso"
+          className="grid grid-cols-2 border-b border-white/10 mb-5"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'login'}
+            onClick={() => switchMode('login')}
+            className={`py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+              mode === 'login'
+                ? 'text-white border-[#E11D48]'
+                : 'text-zinc-400 border-transparent hover:text-zinc-200'
+            }`}
+          >
+            Login
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'register'}
+            onClick={() => switchMode('register')}
+            className={`py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+              mode === 'register'
+                ? 'text-white border-[#E11D48]'
+                : 'text-zinc-400 border-transparent hover:text-zinc-200'
+            }`}
+          >
+            Criar conta
+          </button>
+        </div>
+
+        {reasonMessage && (
+          <div className="mb-4 flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-200 leading-relaxed">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <span>{reasonMessage}</span>
+          </div>
+        )}
 
         {/* Account Type Selector */}
         <div className="mb-5">
@@ -177,10 +265,14 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
         <form onSubmit={handleEmailSubmit} className="space-y-3.5">
           {mode === 'register' && (
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+              <label
+                htmlFor="auth-display-name"
+                className="block text-xs font-medium text-zinc-300 mb-1.5"
+              >
                 Nome ou Pseudônimo
               </label>
               <input
+                id="auth-display-name"
                 type="text"
                 required
                 value={displayName}
@@ -193,10 +285,14 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
           )}
 
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">E-mail</label>
+            <label htmlFor="auth-email" className="block text-xs font-medium text-zinc-300 mb-1.5">
+              E-mail
+            </label>
             <input
+              id="auth-email"
               type="email"
               required
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="voce@exemplo.com"
@@ -205,17 +301,89 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">Senha</label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Mínimo 6 caracteres"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#0A0A0D] border border-white/10 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#E11D48]"
-            />
+            <label htmlFor="auth-password" className="block text-xs font-medium text-zinc-300 mb-1.5">
+              Senha
+            </label>
+            <div className="relative">
+              <input
+                id="auth-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={6}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Mínimo 6 caracteres"
+                className="w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#0A0A0D] border border-white/10 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#E11D48]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
+
+          {mode === 'register' && (
+            <div>
+              <label
+                htmlFor="auth-confirm-password"
+                className="block text-xs font-medium text-zinc-300 mb-1.5"
+              >
+                Confirmar senha
+              </label>
+              <div className="relative">
+                <input
+                  id="auth-confirm-password"
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repita a senha"
+                  className={`w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#0A0A0D] border text-sm text-white placeholder:text-zinc-600 focus:outline-none ${
+                    passwordsMismatch
+                      ? 'border-rose-500/70 focus:border-rose-500'
+                      : passwordsMatch
+                        ? 'border-emerald-500/50 focus:border-emerald-500'
+                        : 'border-white/10 focus:border-[#E11D48]'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  aria-label={
+                    showConfirmPassword
+                      ? 'Ocultar confirmação de senha'
+                      : 'Mostrar confirmação de senha'
+                  }
+                  title={
+                    showConfirmPassword
+                      ? 'Ocultar confirmação de senha'
+                      : 'Mostrar confirmação de senha'
+                  }
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+                >
+                  {showConfirmPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              {passwordsMismatch && (
+                <p className="mt-1.5 text-xs text-rose-400">As senhas não coincidem.</p>
+              )}
+              {passwordsMatch && (
+                <p className="mt-1.5 text-xs text-emerald-400">As senhas coincidem.</p>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="flex items-start gap-2.5 p-3 rounded-xl bg-rose-950/40 border border-rose-500/30 text-xs text-rose-200 leading-relaxed">
@@ -247,11 +415,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
               Ainda não tem conta?{' '}
               <button
                 type="button"
-                onClick={() => {
-                  setMode('register');
-                  setError(null);
-                  setInfoMessage(null);
-                }}
+                onClick={() => switchMode('register')}
                 className="text-white font-semibold hover:underline"
               >
                 Cadastre-se
@@ -262,11 +426,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
               Já possui conta?{' '}
               <button
                 type="button"
-                onClick={() => {
-                  setMode('login');
-                  setError(null);
-                  setInfoMessage(null);
-                }}
+                onClick={() => switchMode('login')}
                 className="text-white font-semibold hover:underline"
               >
                 Fazer login
