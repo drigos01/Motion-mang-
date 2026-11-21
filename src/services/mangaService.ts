@@ -13,7 +13,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { deleteMediaAsset } from '../lib/api';
+import { deleteMediaAssets } from '../lib/api';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import {
   DEFAULT_STIMULUS_SETTINGS,
@@ -978,7 +978,9 @@ export async function deleteManga(
     }
 
     if (mediaUrlsToDelete.length > 0) {
-      await Promise.allSettled(mediaUrlsToDelete.map((url) => deleteMediaAsset(url)));
+      await deleteMediaAssets(mediaUrlsToDelete).catch((err) => {
+        console.warn('Falha parcial ao excluir arquivos da obra no servidor:', err);
+      });
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
@@ -1326,7 +1328,9 @@ export async function deleteChapterAndSync(manga: Manga, chapterId: string): Pro
     }
 
     if (mediaUrlsToDelete.length > 0) {
-      await Promise.allSettled(mediaUrlsToDelete.map((url) => deleteMediaAsset(url)));
+      await deleteMediaAssets(mediaUrlsToDelete).catch((err) => {
+        console.warn('Falha parcial ao excluir arquivos do capítulo no servidor:', err);
+      });
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
@@ -1483,7 +1487,9 @@ export async function deleteChapterPage(
     void syncPreviewSnapshot(mangaId);
 
     if (mediaUrlsToDelete.length > 0) {
-      await Promise.allSettled(mediaUrlsToDelete.map((url) => deleteMediaAsset(url)));
+      await deleteMediaAssets(mediaUrlsToDelete).catch((err) => {
+        console.warn('Falha parcial ao excluir arquivos da página no servidor:', err);
+      });
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
@@ -1524,10 +1530,10 @@ export async function deleteAllChapterPages(
     void syncPreviewSnapshot(mangaId);
 
     const mediaUrlsToDelete = Array.from(mediaUrlsSet);
-    for (let i = 0; i < mediaUrlsToDelete.length; i += 10) {
-      await Promise.allSettled(
-        mediaUrlsToDelete.slice(i, i + 10).map((url) => deleteMediaAsset(url))
-      );
+    if (mediaUrlsToDelete.length > 0) {
+      await deleteMediaAssets(mediaUrlsToDelete).catch((err) => {
+        console.warn('Falha parcial ao excluir arquivos das páginas no servidor:', err);
+      });
     }
 
     return existingPages.length;
@@ -2504,7 +2510,9 @@ export async function deleteUserAccount(params: {
     }
 
     if (resolvedAvatar) {
-      void deleteMediaAsset(resolvedAvatar).catch(() => {});
+      await deleteMediaAssets([resolvedAvatar]).catch((err) => {
+        console.warn('Falha ao excluir foto de perfil do servidor:', err);
+      });
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);

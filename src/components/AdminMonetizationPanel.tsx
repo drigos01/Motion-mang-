@@ -16,7 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { ToastPopup } from './ToastPopup';
-import { uploadMediaAsset } from '../lib/api';
+import { deleteMediaAsset, uploadMediaAsset } from '../lib/api';
 import { fetchChaptersForManga } from '../services/mangaService';
 import {
   cancelPendingRevenueApi,
@@ -305,6 +305,7 @@ export function AdminMonetizationPanel() {
   const handleReceiptUpload = async (file: File, requestId: string) => {
     setUploadingReceipt(true);
     setError(null);
+    const previousReceiptUrl = payReceiptUrl;
     try {
       const uploaded = await uploadMediaAsset({
         file,
@@ -312,11 +313,29 @@ export function AdminMonetizationPanel() {
         mangaId: requestId,
       });
       setPayReceiptUrl(uploaded.url);
+      if (previousReceiptUrl && previousReceiptUrl !== uploaded.url) {
+        await deleteMediaAsset(previousReceiptUrl).catch(() => {});
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha no envio do comprovante.');
     } finally {
       setUploadingReceipt(false);
     }
+  };
+
+  const handleRemoveReceipt = () => {
+    if (!payReceiptUrl) return;
+    const toDelete = payReceiptUrl;
+    setPayReceiptUrl('');
+    void deleteMediaAsset(toDelete).catch(() => {});
+  };
+
+  const handleClosePayModal = () => {
+    if (payReceiptUrl) {
+      void deleteMediaAsset(payReceiptUrl).catch(() => {});
+    }
+    setPayingReq(null);
+    setPayReceiptUrl('');
   };
 
   const handleRecordPixPayment = async (e: React.FormEvent) => {
@@ -1037,7 +1056,7 @@ export function AdminMonetizationPanel() {
                 </h3>
                 <button
                   type="button"
-                  onClick={() => setPayingReq(null)}
+                  onClick={handleClosePayModal}
                   className="text-xs text-zinc-400 hover:text-white"
                 >
                   Fechar
@@ -1125,18 +1144,28 @@ export function AdminMonetizationPanel() {
                         onChange={(e) => {
                           const f = e.target.files?.[0];
                           if (f) void handleReceiptUpload(f, payingReq.id);
+                          e.target.value = '';
                         }}
                       />
                     </label>
                     {payReceiptUrl && (
-                      <a
-                        href={payReceiptUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-emerald-400 underline truncate"
-                      >
-                        Comprovante anexado
-                      </a>
+                      <>
+                        <a
+                          href={payReceiptUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-emerald-400 underline truncate"
+                        >
+                          Comprovante anexado
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleRemoveReceipt}
+                          className="text-xs text-rose-400 hover:text-rose-300 shrink-0"
+                        >
+                          Remover
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

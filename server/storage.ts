@@ -134,12 +134,27 @@ export function sanitizeSegment(input: string): string {
 }
 
 export function normalizeMediaKey(input: string): string | null {
-  let decoded = input;
+  const trimmed = String(input || '').trim();
+  if (!trimmed) return null;
+
+  // Strip query string / fragment and extract path after /api/media/file/ when a full URL is provided
+  let candidate = trimmed.split('#')[0].split('?')[0];
+  const proxyMarker = '/api/media/file/';
+  const markerIdx = candidate.indexOf(proxyMarker);
+  if (markerIdx !== -1) {
+    candidate = candidate.slice(markerIdx + proxyMarker.length);
+  } else if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate)) {
+    // Reject arbitrary external URLs that do not point to /api/media/file/
+    return null;
+  }
+
+  let decoded = candidate;
   try {
-    decoded = decodeURIComponent(input);
+    decoded = decodeURIComponent(candidate);
   } catch {
     // Keep raw string if malformed URI sequences are passed
   }
+
   const cleanKey = decoded
     .replace(/^\/api\/media\/file\//, '')
     .replace(/^\/+/, '');
@@ -291,7 +306,7 @@ export async function saveMediaFile(params: {
   // Fallback: managed local server storage
   ensureLocalDir(LOCAL_MEDIA_ROOT);
   const fullPath = path.resolve(LOCAL_MEDIA_ROOT, key);
-  if (!fullPath.startsWith(LOCAL_MEDIA_ROOT)) {
+  if (!fullPath.startsWith(LOCAL_MEDIA_ROOT + path.sep)) {
     throw new Error('Caminho de armazenamento inválido.');
   }
   ensureLocalDir(path.dirname(fullPath));
@@ -506,7 +521,7 @@ export async function deleteMediaFile(key: string): Promise<void> {
   }
 
   const fullPath = path.resolve(LOCAL_MEDIA_ROOT, cleanKey);
-  if (fullPath.startsWith(LOCAL_MEDIA_ROOT) && fs.existsSync(fullPath)) {
+  if (fullPath.startsWith(LOCAL_MEDIA_ROOT + path.sep) && fs.existsSync(fullPath)) {
     fs.unlinkSync(fullPath);
   }
 }
@@ -549,7 +564,7 @@ export function resolveLocalMediaPath(relativeKey: string): string | null {
   const cleanKey = normalizeMediaKey(relativeKey);
   if (!cleanKey) return null;
   const fullPath = path.resolve(LOCAL_MEDIA_ROOT, cleanKey);
-  if (!fullPath.startsWith(LOCAL_MEDIA_ROOT)) return null;
+  if (!fullPath.startsWith(LOCAL_MEDIA_ROOT + path.sep)) return null;
   if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) return null;
   return fullPath;
 }

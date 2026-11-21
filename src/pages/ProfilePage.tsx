@@ -96,23 +96,48 @@ export function ProfilePage({ onOpenAuth, onNavigate }: ProfilePageProps) {
     const previousAvatar = profile?.avatarUrl || avatarUrl || '';
     setUploadingAvatar(true);
     setAvatarProgress(0);
+    let uploadedUrl: string | null = null;
     try {
       const res = await uploadMediaAsset({
         file,
         kind: 'avatar',
         onProgress: setAvatarProgress,
       });
+      uploadedUrl = res.url;
       await updateUserProfile({ avatarUrl: res.url });
       setAvatarUrl(res.url);
       if (previousAvatar && previousAvatar !== res.url) {
-        void deleteMediaAsset(previousAvatar).catch(() => {});
+        await deleteMediaAsset(previousAvatar).catch(() => {});
       }
       setSavedMsg('Foto de perfil atualizada com sucesso!');
     } catch (err) {
+      if (uploadedUrl && uploadedUrl !== previousAvatar) {
+        await deleteMediaAsset(uploadedUrl).catch(() => {});
+      }
       setError(err instanceof Error ? err.message : 'Erro ao enviar avatar.');
     } finally {
       setUploadingAvatar(false);
       setAvatarProgress(null);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    if (uploadingAvatar || !avatarUrl) return;
+    const previousAvatar = profile?.avatarUrl || avatarUrl;
+    setUploadingAvatar(true);
+    setError(null);
+    setSavedMsg(null);
+    try {
+      await updateUserProfile({ avatarUrl: '' });
+      setAvatarUrl('');
+      if (previousAvatar) {
+        await deleteMediaAsset(previousAvatar).catch(() => {});
+      }
+      setSavedMsg('Foto de perfil removida do perfil e do servidor.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao remover foto de perfil.');
+    } finally {
+      setUploadingAvatar(false);
     }
   };
 
@@ -126,7 +151,7 @@ export function ProfilePage({ onOpenAuth, onNavigate }: ProfilePageProps) {
       await updateUserProfile({ displayName, handle, bio, avatarUrl, accountType });
       await updateReaderPreferences({ preferredMode, layoutMode });
       if (previousAvatar && previousAvatar !== avatarUrl) {
-        void deleteMediaAsset(previousAvatar).catch(() => {});
+        await deleteMediaAsset(previousAvatar).catch(() => {});
       }
       setSavedMsg('Perfil atualizado com sucesso.');
     } catch (err) {
@@ -214,29 +239,43 @@ export function ProfilePage({ onOpenAuth, onNavigate }: ProfilePageProps) {
             </div>
           )}
 
-          <label
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/8 text-xs font-medium text-white ${
-              uploadingAvatar
-                ? 'opacity-60 cursor-not-allowed'
-                : 'hover:bg-white/15 cursor-pointer'
-            }`}
-          >
-            <Upload className="w-3.5 h-3.5" />
-            {uploadingAvatar
-              ? `Enviando... ${avatarProgress ?? 0}%`
-              : 'Enviar Nova Foto'}
-            <input
-              type="file"
-              disabled={uploadingAvatar}
-              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/gif,image/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleSelectAvatarFile(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/8 text-xs font-medium text-white ${
+                uploadingAvatar
+                  ? 'opacity-60 cursor-not-allowed'
+                  : 'hover:bg-white/15 cursor-pointer'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {uploadingAvatar
+                ? `Enviando... ${avatarProgress ?? 0}%`
+                : 'Enviar Nova Foto'}
+              <input
+                type="file"
+                disabled={uploadingAvatar}
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/gif,image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleSelectAvatarFile(f);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+
+            {avatarUrl && (
+              <button
+                type="button"
+                disabled={uploadingAvatar || saving}
+                onClick={() => void handleRemoveAvatar()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/12 hover:bg-rose-500/20 border border-rose-500/25 text-xs font-medium text-rose-300 disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Remover Foto
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

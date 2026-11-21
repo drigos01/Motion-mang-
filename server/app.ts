@@ -81,7 +81,53 @@ export function createApiApp(options: ApiAppOptions = {}): express.Express {
   // Real authenticated media upload endpoint (covers, banners, avatars, original pages, motion loops, admin receipts)
   app.post('/api/media/upload', createMediaUploadHandler(options.uploadDeps));
 
-  // Delete uploaded media owned by user (or receipt by admin)
+  const authorizeDeleteKeys = async (
+    user: NonNullable<Awaited<ReturnType<typeof verifyTokenFn>>>,
+    cleanKeys: string[]
+  ): Promise<{ allowed: boolean; statusCode?: number; error?: string }> => {
+    const ownerPrefix = `users/${sanitizeSegment(user.uid)}/`;
+    let needsAdminCheck = false;
+    let hasReceiptKey = false;
+
+    for (const cleanKey of cleanKeys) {
+      if (cleanKey.startsWith('admin/monetization/receipts/')) {
+        needsAdminCheck = true;
+        hasReceiptKey = true;
+      } else if (cleanKey.startsWith('users/')) {
+        if (!cleanKey.startsWith(ownerPrefix)) {
+          needsAdminCheck = true;
+        }
+      } else {
+        return {
+          allowed: false,
+          statusCode: 403,
+          error: 'Você só pode remover seus próprios arquivos.',
+        };
+      }
+    }
+
+    if (needsAdminCheck) {
+      let isAdmin = false;
+      try {
+        isAdmin = await checkAdminFn(user.uid, user.email, user.idToken);
+      } catch {
+        isAdmin = false;
+      }
+      if (!isAdmin) {
+        return {
+          allowed: false,
+          statusCode: 403,
+          error: hasReceiptKey
+            ? 'Permissão negada para remover este comprovante.'
+            : 'Você só pode remover seus próprios arquivos.',
+        };
+      }
+    }
+
+    return { allowed: true };
+  };
+
+  // Delete uploaded media owned by user (or any user/receipt media by admin)
   app.post('/api/media/delete', async (req, res) => {
     try {
       const user = await verifyTokenFn(req.headers.authorization);
@@ -95,17 +141,15 @@ export function createApiApp(options: ApiAppOptions = {}): express.Express {
         res.status(400).json({ error: 'Identificador de arquivo inválido.' });
         return;
       }
-      const isReceipt = cleanKey.startsWith('admin/monetization/receipts/');
-      if (isReceipt) {
-        const isAdmin = await checkAdminFn(user.uid, user.email, user.idToken);
-        if (!isAdmin) {
-          res.status(403).json({ error: 'Permissão negada para remover este comprovante.' });
-          return;
-        }
-      } else if (!cleanKey.startsWith(`users/${sanitizeSegment(user.uid)}/`)) {
-        res.status(403).json({ error: 'Você só pode remover seus próprios arquivos.' });
+
+      const authCheck = await authorizeDeleteKeys(user, [cleanKey]);
+      if (!authCheck.allowed) {
+        res.status(authCheck.statusCode || 403).json({
+          error: authCheck.error || 'Permissão negada.',
+        });
         return;
       }
+
       await deleteFileFn(cleanKey);
       res.json({ deleted: true, key: cleanKey });
     } catch (err) {
@@ -115,6 +159,99 @@ export function createApiApp(options: ApiAppOptions = {}): express.Express {
       }
       console.error('Delete media error:', err);
       res.status(500).json({ error: 'Erro ao remover arquivo do armazenamento.' });
+    }
+  });
+
+  // Batch delete uploaded media owned by user (or any user/receipt media by admin)
+  app.post('/api/media/delete-batch', async (req, res) => {
+    try {
+      const user = await verifyTokenFn(req.headers.authorization);
+      if (!user || !user.emailVerified) {
+        res.status(401).json({ error: 'Não autorizado.' });
+        return;
+      }
+
+      const rawKeys = Array.isArray(req.body?.keys) ? req.body.keys : null;
+      if (!rawKeys) {
+        res.status(400).json({ error: 'Lista de arquivos inválida.' });
+        return;
+      }
+      if (rawKeys.length === 0) {
+        res.json({ deleted: [], failed: [] });
+        return;
+      }
+      if (rawKeys.length > 200) {
+        res.status(400).json({ error: 'Máximo de 200 arquivos por lote de exclusão.' });
+        return;
+      }
+
+      const uniqueKeys: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of rawKeys) {
+        const clean = normalizeMediaKey(String(raw || ''));
+        if (!clean) {
+          res.status(400).json({ error: 'Identificador de arquivo inválido no lote.' });
+          return;
+        }
+        if (!seen.has(clean)) {
+          seen.add(clean);
+          uniqueKeys.push(clean);
+        }
+      }
+
+      const authCheck = await authorizeDeleteKeys(user, uniqueKeys);
+      if (!authCheck.allowed) {
+        res.status(authCheck.statusCode || 403).json({
+          error: authCheck.error || 'Permissão negada.',
+        });
+        return;
+      }
+
+      const deleted: string[] = [];
+      const failed: Array<{ key: string; error: string }> = [];
+
+      for (let i = 0; i < uniqueKeys.length; i += 10) {
+        const chunk = uniqueKeys.slice(i, i + 10);
+        const results = await Promise.allSettled(
+          chunk.map(async (key) => {
+            await deleteFileFn(key);
+            return key;
+          })
+        );
+        results.forEach((result, idx) => {
+          const key = chunk[idx];
+          if (result.status === 'fulfilled') {
+            deleted.push(key);
+          } else {
+            const reason = result.reason;
+            if (reason instanceof StorageConfigError) {
+              throw reason;
+            }
+            failed.push({
+              key,
+              error: reason instanceof Error ? reason.message : 'Erro ao excluir arquivo.',
+            });
+          }
+        });
+      }
+
+      if (deleted.length === 0 && failed.length > 0) {
+        res.status(500).json({
+          error: failed[0].error || 'Erro ao remover arquivos do armazenamento.',
+          deleted,
+          failed,
+        });
+        return;
+      }
+
+      res.json({ deleted, failed });
+    } catch (err) {
+      if (err instanceof StorageConfigError) {
+        res.status(err.statusCode).json({ error: err.message });
+        return;
+      }
+      console.error('Batch delete media error:', err);
+      res.status(500).json({ error: 'Erro ao remover arquivos do armazenamento.' });
     }
   });
 

@@ -30,7 +30,13 @@ import { MotionCropPreview } from '../components/MotionCropPreview';
 import { AppRoute } from '../components/Navbar';
 import { ToastPopup } from '../components/ToastPopup';
 import { useAuth } from '../context/AuthContext';
-import { deleteMediaAsset, fetchStorageStatus, StorageStatusResponse, uploadMediaAsset } from '../lib/api';
+import {
+  deleteMediaAsset,
+  deleteMediaAssets,
+  fetchStorageStatus,
+  StorageStatusResponse,
+  uploadMediaAsset,
+} from '../lib/api';
 import {
   getImageDimensionsInBrowser,
   inspectMotionFileInBrowser,
@@ -325,7 +331,30 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     }
   }, [selectedManga?.id, selectedManga?.previewSlug, selectedManga?.title]);
 
+  const cleanupUnsavedMangaMedia = async () => {
+    const unsaved: string[] = [];
+    if (coverUrl && coverUrl !== savedCoverUrl) {
+      unsaved.push(coverUrl);
+    }
+    if (bannerUrl && bannerUrl !== savedBannerUrl) {
+      unsaved.push(bannerUrl);
+    }
+    if (unsaved.length > 0) {
+      await deleteMediaAssets(unsaved).catch(() => {});
+    }
+  };
+
+  const handleCancelMangaForm = () => {
+    void cleanupUnsavedMangaMedia();
+    setCoverUrl(savedCoverUrl);
+    setBannerUrl(savedBannerUrl);
+    setShowMangaForm(false);
+  };
+
   const openCreateManga = () => {
+    if (showMangaForm) {
+      void cleanupUnsavedMangaMedia();
+    }
     setEditingMangaId(null);
     setTitle('');
     setAuthorName(profile?.displayName || user?.displayName || '');
@@ -342,6 +371,9 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   };
 
   const openEditManga = (m: Manga) => {
+    if (showMangaForm) {
+      void cleanupUnsavedMangaMedia();
+    }
     setEditingMangaId(m.id);
     setTitle(m.title);
     setAuthorName(m.authorName);
@@ -373,12 +405,22 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
       else setBannerUrl(res.url);
 
       if (previousFormUrl && previousFormUrl !== savedUrl && previousFormUrl !== res.url) {
-        void deleteMediaAsset(previousFormUrl).catch(() => {});
+        await deleteMediaAsset(previousFormUrl).catch(() => {});
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro no upload da imagem.');
     } finally {
       setUploadProgress(null);
+    }
+  };
+
+  const handleClearMangaBrandImage = (kind: 'cover' | 'banner') => {
+    const currentUrl = kind === 'cover' ? coverUrl : bannerUrl;
+    const savedUrl = kind === 'cover' ? savedCoverUrl : savedBannerUrl;
+    if (kind === 'cover') setCoverUrl('');
+    else setBannerUrl('');
+    if (currentUrl && currentUrl !== savedUrl) {
+      void deleteMediaAsset(currentUrl).catch(() => {});
     }
   };
 
@@ -399,12 +441,18 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           coverUrl,
           bannerUrl,
         });
+        const obsoleteUrls: string[] = [];
         if (savedCoverUrl && savedCoverUrl !== coverUrl) {
-          void deleteMediaAsset(savedCoverUrl).catch(() => {});
+          obsoleteUrls.push(savedCoverUrl);
         }
         if (savedBannerUrl && savedBannerUrl !== bannerUrl) {
-          void deleteMediaAsset(savedBannerUrl).catch(() => {});
+          obsoleteUrls.push(savedBannerUrl);
         }
+        if (obsoleteUrls.length > 0) {
+          await deleteMediaAssets(obsoleteUrls).catch(() => {});
+        }
+        setSavedCoverUrl(coverUrl);
+        setSavedBannerUrl(bannerUrl);
         setFeedback('Obra atualizada com sucesso.');
       } else {
         const created = await createManga({
@@ -418,6 +466,8 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           ageRating,
           status,
         });
+        setSavedCoverUrl(coverUrl);
+        setSavedBannerUrl(bannerUrl);
         setSelectedManga(created);
         setFeedback('Obra criada com sucesso! Agora crie capítulos e envie suas páginas.');
       }
@@ -593,6 +643,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     setUploadingPage(true);
     setError(null);
     let uploadedOrigUrl: string | null = null;
+    let uploadedMotionUrl: string | null = null;
     try {
       let validatedMotion: MotionInspectionResult | null = motionInspection;
       if (motionFile && !validatedMotion) {
@@ -625,6 +676,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           },
           onProgress: setUploadProgress,
         });
+        uploadedMotionUrl = uploadedMotion.url;
         motionRes = { url: uploadedMotion.url, mimeType: uploadedMotion.mimeType };
       }
 
@@ -648,8 +700,9 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
       await loadChapters(selectedManga.id);
       setFeedback('Página vinculada adicionada ao capítulo!');
     } catch (err) {
-      if (uploadedOrigUrl) {
-        void deleteMediaAsset(uploadedOrigUrl).catch(() => {});
+      const rollbackUrls = [uploadedOrigUrl, uploadedMotionUrl].filter((u): u is string => Boolean(u));
+      if (rollbackUrls.length > 0) {
+        await deleteMediaAssets(rollbackUrls).catch(() => {});
       }
       setError(err instanceof Error ? err.message : 'Falha ao enviar página.');
     } finally {
@@ -678,11 +731,13 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     setError(null);
     setFeedback(null);
     let uploadedCount = 0;
+    let currentUploadedUrl: string | null = null;
     try {
       let nextPageNum =
         pages.length > 0 ? Math.max(...pages.map((p) => p.pageNumber)) + 1 : 1;
       for (let i = 0; i < sorted.length; i++) {
         const file = sorted[i];
+        currentUploadedUrl = null;
         setUploadProgress(0);
         setBulkProgress(`Enviando página ${i + 1} de ${sorted.length}: ${file.name}`);
         const res = await uploadMediaAsset({
@@ -692,6 +747,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           chapterId: chapterSnapshot.id,
           onProgress: setUploadProgress,
         });
+        currentUploadedUrl = res.url;
         const createdPage = await addPageToChapter({
           mangaId,
           chapter: chapterSnapshot,
@@ -700,6 +756,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           originalUrl: res.url,
           originalMime: res.mimeType,
         });
+        currentUploadedUrl = null;
         uploadedCount++;
         setPages((prev) =>
           [...prev.filter((p) => p.id !== createdPage.id), createdPage].sort(
@@ -721,6 +778,9 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         `${uploadedCount} ${uploadedCount === 1 ? 'página adicionada' : 'páginas adicionadas'} ao Capítulo ${chapterSnapshot.chapterNumber}.`
       );
     } catch (err) {
+      if (currentUploadedUrl) {
+        await deleteMediaAsset(currentUploadedUrl).catch(() => {});
+      }
       setError(err instanceof Error ? err.message : 'Erro no envio em lote.');
     } finally {
       if (uploadedCount > 0) {
@@ -747,6 +807,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     if (!selectedManga || !selectedChapter) return false;
     setError(null);
     const oldUrl = kind === 'original' ? page.originalUrl : page.motionUrl;
+    let uploadedNewUrl: string | null = null;
     try {
       setUploadProgress(0);
       const res = await uploadMediaAsset({
@@ -757,6 +818,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         ...(kind === 'motion' ? { motionOptions } : {}),
         onProgress: setUploadProgress,
       });
+      uploadedNewUrl = res.url;
       await updatePageAssets({
         mangaId: selectedManga.id,
         chapterId: selectedChapter.id,
@@ -765,8 +827,9 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           ? { originalUrl: res.url, originalMime: res.mimeType }
           : { motionUrl: res.url, motionMime: res.mimeType }),
       });
+      uploadedNewUrl = null;
       if (oldUrl && oldUrl !== res.url) {
-        void deleteMediaAsset(oldUrl).catch(() => {});
+        await deleteMediaAsset(oldUrl).catch(() => {});
       }
       await loadPages(selectedManga.id, selectedChapter.id);
       await loadChapters(selectedManga.id);
@@ -777,10 +840,40 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
       );
       return true;
     } catch (err) {
+      if (uploadedNewUrl && uploadedNewUrl !== oldUrl) {
+        await deleteMediaAsset(uploadedNewUrl).catch(() => {});
+      }
       setError(err instanceof Error ? err.message : 'Erro ao atualizar arquivo da página.');
       return false;
     } finally {
       setUploadProgress(null);
+    }
+  };
+
+  const handleRemovePageMotion = async (page: ChapterPage) => {
+    if (!selectedManga || !selectedChapter || !page.motionUrl || deletingId) return;
+    const oldMotionUrl = page.motionUrl;
+    setDeletingId(page.id);
+    setError(null);
+    try {
+      await updatePageAssets({
+        mangaId: selectedManga.id,
+        chapterId: selectedChapter.id,
+        pageId: page.id,
+        motionUrl: '',
+        motionMime: '',
+      });
+      await deleteMediaAsset(oldMotionUrl).catch(() => {});
+      if (pendingMotionReplace?.page.id === page.id) {
+        setPendingMotionReplace(null);
+      }
+      await loadPages(selectedManga.id, selectedChapter.id);
+      await loadChapters(selectedManga.id);
+      setFeedback(`Arquivo Motion removido da Página #${page.pageNumber} e do servidor.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao remover arquivo Motion.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -1157,7 +1250,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
             </h2>
             <button
               type="button"
-              onClick={() => setShowMangaForm(false)}
+              onClick={handleCancelMangaForm}
               className="text-xs text-zinc-400 hover:text-white"
             >
               Cancelar
@@ -1283,19 +1376,32 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                   className="w-24 h-32 object-cover rounded-lg border border-white/10"
                 />
               )}
-              <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
-                <Upload className="w-3.5 h-3.5" />
-                {coverUrl ? 'Trocar Capa' : 'Enviar Capa (JPG/PNG/WebP)'}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handleCoverUpload(f, 'cover');
-                  }}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" />
+                  {coverUrl ? 'Trocar Capa' : 'Enviar Capa (JPG/PNG/WebP)'}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleCoverUpload(f, 'cover');
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {coverUrl && (
+                  <button
+                    type="button"
+                    onClick={() => handleClearMangaBrandImage('cover')}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remover
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="p-4 rounded-xl bg-[#08080A] border border-white/10 space-y-2.5">
@@ -1307,19 +1413,32 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                   className="w-full h-24 object-cover rounded-lg border border-white/10"
                 />
               )}
-              <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
-                <Upload className="w-3.5 h-3.5" />
-                {bannerUrl ? 'Trocar Banner' : 'Enviar Banner'}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handleCoverUpload(f, 'banner');
-                  }}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" />
+                  {bannerUrl ? 'Trocar Banner' : 'Enviar Banner'}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleCoverUpload(f, 'banner');
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {bannerUrl && (
+                  <button
+                    type="button"
+                    onClick={() => handleClearMangaBrandImage('banner')}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remover
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1332,7 +1451,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
           <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"
-              onClick={() => setShowMangaForm(false)}
+              onClick={handleCancelMangaForm}
               className="px-4 py-2.5 rounded-xl text-sm text-zinc-300 hover:bg-white/5"
             >
               Cancelar
@@ -2340,6 +2459,16 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                                     }}
                                   />
                                 </label>
+                                {p.motionUrl && (
+                                  <button
+                                    type="button"
+                                    disabled={deletingId === p.id}
+                                    onClick={() => void handleRemovePageMotion(p)}
+                                    className="block w-full text-[10px] text-zinc-400 hover:text-rose-400 text-center disabled:opacity-40"
+                                  >
+                                    Remover Motion
+                                  </button>
+                                )}
                               </div>
                             </div>
 

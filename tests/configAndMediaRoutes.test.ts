@@ -10,7 +10,7 @@ import {
   getSafeConfigReport,
   loadFirebaseAppletConfig,
 } from '../server/config.ts';
-import { saveMediaFile, StorageConfigError } from '../server/storage.ts';
+import { deleteMediaFile, normalizeMediaKey, saveMediaFile, StorageConfigError } from '../server/storage.ts';
 
 // Minimal valid 1x1 PNG buffer
 const TINY_PNG = Buffer.from([
@@ -177,6 +177,7 @@ test('Express API routes: health, status secret-safety, upload, HEAD, GET, Range
       }
       return null;
     },
+    checkAdmin: async () => false,
     uploadDeps: {
       verifyToken: async (authHeader) => {
         if (authHeader === 'Bearer valid-token') {
@@ -302,6 +303,143 @@ test('Express API routes: health, status secret-safety, upload, HEAD, GET, Range
       }
     }
     const testUserDir = path.resolve(process.cwd(), 'storage', 'media', 'users', testUid);
+    if (fs.existsSync(testUserDir)) {
+      fs.rmSync(testUserDir, { recursive: true, force: true });
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('normalizeMediaKey handles full proxy URLs with query strings and blocks external URLs', () => {
+  assert.equal(
+    normalizeMediaKey('https://motionmang.vercel.app/api/media/file/users/u1/avatar/photo.webp?v=123#top'),
+    'users/u1/avatar/photo.webp'
+  );
+  assert.equal(
+    normalizeMediaKey('/api/media/file/users/u1/mangas/m1/brand/cover.png'),
+    'users/u1/mangas/m1/brand/cover.png'
+  );
+  assert.equal(normalizeMediaKey('https://evil.example.com/file.png'), null);
+  assert.equal(normalizeMediaKey('/api/media/file/../../etc/passwd'), null);
+});
+
+test('Admin can delete user-owned media and /api/media/delete-batch deletes multiple files', async () => {
+  const creatorUid = 'batch-creator-user';
+  const adminUid = 'batch-admin-user';
+  const app = createApiApp({
+    verifyToken: async (authHeader) => {
+      if (authHeader === 'Bearer creator-token') {
+        return {
+          uid: creatorUid,
+          email: 'creator@example.com',
+          emailVerified: true,
+          idToken: 'creator-token',
+        };
+      }
+      if (authHeader === 'Bearer admin-token') {
+        return {
+          uid: adminUid,
+          email: 'admin@example.com',
+          emailVerified: true,
+          idToken: 'admin-token',
+        };
+      }
+      if (authHeader === 'Bearer other-token') {
+        return {
+          uid: 'stranger-user',
+          email: 'stranger@example.com',
+          emailVerified: true,
+          idToken: 'other-token',
+        };
+      }
+      return null;
+    },
+    checkAdmin: async (uid) => uid === adminUid,
+    uploadDeps: {
+      verifyToken: async (authHeader) => {
+        if (authHeader === 'Bearer creator-token') {
+          return {
+            uid: creatorUid,
+            email: 'creator@example.com',
+            emailVerified: true,
+            idToken: 'creator-token',
+          };
+        }
+        return null;
+      },
+    },
+  });
+
+  const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const uploadedUrls: string[] = [];
+
+  try {
+    for (let i = 0; i < 3; i++) {
+      const form = new FormData();
+      form.append('kind', 'original');
+      form.append('mangaId', 'manga-batch');
+      form.append('chapterId', 'chap-1');
+      form.append('file', new Blob([TINY_PNG], { type: 'image/png' }), `page-${i + 1}.png`);
+      const uploadRes = await fetch(`${baseUrl}/api/media/upload`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer creator-token' },
+        body: form,
+      });
+      assert.equal(uploadRes.status, 201);
+      const data = (await uploadRes.json()) as { url: string };
+      uploadedUrls.push(data.url);
+    }
+
+    // Non-owner non-admin cannot batch delete
+    const strangerBatch = await fetch(`${baseUrl}/api/media/delete-batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer other-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ keys: uploadedUrls }),
+    });
+    assert.equal(strangerBatch.status, 403);
+
+    // Admin can delete a creator's single file (e.g. during admin obra/conta removal)
+    const adminSingle = await fetch(`${baseUrl}/api/media/delete`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer admin-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ key: `https://motionmang.vercel.app${uploadedUrls[0]}` }),
+    });
+    assert.equal(adminSingle.status, 200);
+    assert.equal((await fetch(`${baseUrl}${uploadedUrls[0]}`)).status, 404);
+
+    // Creator can batch-delete remaining files in one call
+    const creatorBatch = await fetch(`${baseUrl}/api/media/delete-batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer creator-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ keys: uploadedUrls.slice(1) }),
+    });
+    assert.equal(creatorBatch.status, 200);
+    const batchJson = (await creatorBatch.json()) as { deleted: string[]; failed: unknown[] };
+    assert.equal(batchJson.deleted.length, 2);
+    assert.equal(batchJson.failed.length, 0);
+
+    for (const url of uploadedUrls) {
+      assert.equal((await fetch(`${baseUrl}${url}`)).status, 404);
+    }
+  } finally {
+    for (const url of uploadedUrls) {
+      await deleteMediaFile(url).catch(() => {});
+    }
+    const testUserDir = path.resolve(process.cwd(), 'storage', 'media', 'users', creatorUid);
     if (fs.existsSync(testUserDir)) {
       fs.rmSync(testUserDir, { recursive: true, force: true });
     }

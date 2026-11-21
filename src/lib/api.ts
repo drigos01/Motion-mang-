@@ -301,26 +301,120 @@ export async function uploadMediaAsset(params: {
   throw lastError instanceof Error ? lastError : new Error('Erro no envio do arquivo.');
 }
 
-export async function deleteMediaAsset(urlOrKey: string): Promise<void> {
+export function extractMediaAssetKey(urlOrKey: string): string | null {
+  const trimmed = String(urlOrKey || '').trim();
+  if (!trimmed) return null;
+  const clean = trimmed.split('#')[0].split('?')[0];
+  const marker = '/api/media/file/';
+  const idx = clean.indexOf(marker);
+  if (idx === -1) return null;
+  const key = clean.slice(idx + marker.length).replace(/^\/+/, '');
+  return key || null;
+}
+
+async function postMediaDeleteWithRetry(
+  endpoint: '/api/media/delete' | '/api/media/delete-batch',
+  body: Record<string, unknown>
+): Promise<Record<string, unknown>> {
   const user = auth.currentUser;
-  if (!user || !urlOrKey || !urlOrKey.includes('/api/media/file/')) return;
-  const token = await user.getIdToken();
-  const res = await fetch('/api/media/delete', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ key: urlOrKey }),
-  });
-  if (!res.ok) {
-    let msg = 'Erro ao remover arquivo do armazenamento.';
+  if (!user) {
+    throw new Error('Faça login para remover arquivos do servidor.');
+  }
+
+  let forceTokenRefresh = needsTokenRefreshOnNextUpload;
+  if (forceTokenRefresh) {
+    needsTokenRefreshOnNextUpload = false;
+  }
+
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const data = (await res.json()) as { error?: string };
-      if (data.error) msg = data.error;
-    } catch {
-      // Ignore JSON parse error
+      const token = await user.getIdToken(forceTokenRefresh);
+      forceTokenRefresh = false;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      let parsed: Record<string, unknown> | null = null;
+      if (contentType.includes('application/json')) {
+        try {
+          parsed = (await res.json()) as Record<string, unknown>;
+        } catch {
+          parsed = null;
+        }
+      }
+
+      if (res.ok) {
+        return parsed || {};
+      }
+
+      const msg =
+        parsed && typeof parsed.error === 'string' && parsed.error.trim().length > 0
+          ? parsed.error
+          : `Erro ao remover arquivo do armazenamento (HTTP ${res.status}).`;
+
+      const retryable = res.status === 401 || [408, 429, 502, 503, 504].includes(res.status);
+      if (!retryable || attempt >= maxAttempts - 1) {
+        throw new Error(msg);
+      }
+      if (res.status === 401) {
+        forceTokenRefresh = true;
+      }
+      lastError = new Error(msg);
+    } catch (err) {
+      lastError = err;
+      const isNetworkOrRetryable =
+        err instanceof TypeError ||
+        (err instanceof Error &&
+          /401|502|503|504|408|429|Falha|network|Failed to fetch/i.test(err.message));
+      if (!isNetworkOrRetryable || attempt >= maxAttempts - 1) {
+        throw err instanceof Error ? err : new Error('Erro ao remover arquivo do armazenamento.');
+      }
     }
-    throw new Error(msg);
+    await waitMs(450 * (attempt + 1));
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Erro ao remover arquivo do armazenamento.');
+}
+
+export async function deleteMediaAsset(urlOrKey: string): Promise<void> {
+  if (!auth.currentUser) return;
+  const key = extractMediaAssetKey(urlOrKey);
+  if (!key) return;
+  await postMediaDeleteWithRetry('/api/media/delete', { key });
+}
+
+export async function deleteMediaAssets(urlsOrKeys: string[]): Promise<void> {
+  if (!auth.currentUser || !Array.isArray(urlsOrKeys) || urlsOrKeys.length === 0) return;
+
+  const uniqueKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const item of urlsOrKeys) {
+    const key = extractMediaAssetKey(item);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      uniqueKeys.push(key);
+    }
+  }
+  if (uniqueKeys.length === 0) return;
+
+  if (uniqueKeys.length === 1) {
+    await postMediaDeleteWithRetry('/api/media/delete', { key: uniqueKeys[0] });
+    return;
+  }
+
+  for (let i = 0; i < uniqueKeys.length; i += 100) {
+    const chunk = uniqueKeys.slice(i, i + 100);
+    await postMediaDeleteWithRetry('/api/media/delete-batch', { keys: chunk });
   }
 }
