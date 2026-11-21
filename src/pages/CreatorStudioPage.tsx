@@ -22,6 +22,7 @@ import {
   Upload,
   Users,
   Wallet,
+  X,
 } from 'lucide-react';
 import { MotionAlignment } from '../../shared/motionMedia';
 import { CreatorInteractionsPanel } from '../components/CreatorInteractionsPanel';
@@ -33,8 +34,6 @@ import { useAuth } from '../context/AuthContext';
 import {
   deleteMediaAsset,
   deleteMediaAssets,
-  fetchStorageStatus,
-  StorageStatusResponse,
   uploadMediaAsset,
 } from '../lib/api';
 import {
@@ -43,7 +42,11 @@ import {
   MotionInspectionResult,
 } from '../lib/motionValidation';
 import { evaluateNewStimulusMilestones } from '../lib/stimulus';
-import { downloadChapterPagesZip } from '../lib/zipArchive';
+import {
+  downloadChapterPagesSequential,
+  downloadChapterPagesZip,
+  DownloadMediaMode,
+} from '../lib/zipArchive';
 import {
   addPageToChapter,
   createChapter,
@@ -86,7 +89,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   const { user, profile, resendVerificationEmail, refreshProfile } = useAuth();
   const [studioTab, setStudioTab] = useState<'works' | 'interactions' | 'monetization'>('works');
   const [interactionsMangaFilter, setInteractionsMangaFilter] = useState<string>('all');
-  const [storageStatus, setStorageStatus] = useState<StorageStatusResponse | null>(null);
   const [mangas, setMangas] = useState<Manga[]>([]);
   const [selectedManga, setSelectedManga] = useState<Manga | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -156,15 +158,12 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   const [deletingAllPages, setDeletingAllPages] = useState(false);
 
   // Private preview link management state
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewSlugInput, setPreviewSlugInput] = useState('');
   const [previewActionLoading, setPreviewActionLoading] = useState<
     'update_slug' | 'regenerate' | 'revoke' | null
   >(null);
   const [copiedPreviewLink, setCopiedPreviewLink] = useState(false);
-
-  useEffect(() => {
-    fetchStorageStatus().then(setStorageStatus).catch(() => {});
-  }, []);
 
   const loadInteractions = async (worksList: Manga[]) => {
     if (worksList.length === 0) {
@@ -320,6 +319,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
   }, [selectedChapter?.id]);
 
   useEffect(() => {
+    setShowPreviewModal(false);
     if (selectedManga) {
       setPreviewSlugInput(
         selectedManga.previewSlug || normalizePreviewSlug(selectedManga.title)
@@ -351,10 +351,23 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     setShowMangaForm(false);
   };
 
+  useEffect(() => {
+    if (!showMangaForm && !showPreviewModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showMangaForm) handleCancelMangaForm();
+        else if (showPreviewModal) setShowPreviewModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showMangaForm, showPreviewModal, coverUrl, bannerUrl, savedCoverUrl, savedBannerUrl]);
+
   const openCreateManga = () => {
     if (showMangaForm) {
       void cleanupUnsavedMangaMedia();
     }
+    setStudioTab('works');
     setEditingMangaId(null);
     setTitle('');
     setAuthorName(profile?.displayName || user?.displayName || '');
@@ -850,33 +863,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     }
   };
 
-  const handleRemovePageMotion = async (page: ChapterPage) => {
-    if (!selectedManga || !selectedChapter || !page.motionUrl || deletingId) return;
-    const oldMotionUrl = page.motionUrl;
-    setDeletingId(page.id);
-    setError(null);
-    try {
-      await updatePageAssets({
-        mangaId: selectedManga.id,
-        chapterId: selectedChapter.id,
-        pageId: page.id,
-        motionUrl: '',
-        motionMime: '',
-      });
-      await deleteMediaAsset(oldMotionUrl).catch(() => {});
-      if (pendingMotionReplace?.page.id === page.id) {
-        setPendingMotionReplace(null);
-      }
-      await loadPages(selectedManga.id, selectedChapter.id);
-      await loadChapters(selectedManga.id);
-      setFeedback(`Arquivo Motion removido da Página #${page.pageNumber} e do servidor.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha ao remover arquivo Motion.');
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
   const handleConfirmMotionReplace = async () => {
     if (!pendingMotionReplace || applyingMotionReplace) return;
     setApplyingMotionReplace(true);
@@ -919,7 +905,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
 
   const chapterOrMangaHasMotion = motionPagesCount > 0;
 
-  const handleDownloadChapterZip = async (includeMotion: boolean) => {
+  const handleDownloadChapterZip = async (mode: DownloadMediaMode) => {
     if (!selectedManga || !selectedChapter || pages.length === 0 || downloadingPages) return;
     setDownloadingPages(true);
     setDownloadMotionPromptOpen(false);
@@ -930,7 +916,8 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         mangaTitle: selectedManga.title,
         chapterNumber: selectedChapter.chapterNumber,
         pages,
-        includeMotion,
+        includeMotion: mode === 'with_motion',
+        mode,
         onProgress: ({ completed, total, currentFilename }) => {
           setDownloadProgress(
             `Preparando ZIP (${completed}/${total}): ${currentFilename}`
@@ -938,7 +925,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         },
       });
       setFeedback(
-        `Download iniciado: ${result.zipFilename} (${result.filesCount} ${
+        `ZIP em ordem iniciado: ${result.zipFilename} (${result.filesCount} ${
           result.filesCount === 1 ? 'arquivo' : 'arquivos'
         }).`
       );
@@ -954,14 +941,44 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
     }
   };
 
+  const handleDownloadChapterSequential = async (mode: DownloadMediaMode) => {
+    if (!selectedManga || !selectedChapter || pages.length === 0 || downloadingPages) return;
+    setDownloadingPages(true);
+    setDownloadMotionPromptOpen(false);
+    setError(null);
+    setFeedback(null);
+    try {
+      const result = await downloadChapterPagesSequential({
+        chapterNumber: selectedChapter.chapterNumber,
+        pages,
+        mode,
+        onProgress: ({ completed, total, currentFilename }) => {
+          setDownloadProgress(
+            `Baixando em ordem (${completed}/${total}): ${currentFilename}`
+          );
+        },
+      });
+      setFeedback(
+        `${result.filesCount} ${
+          result.filesCount === 1 ? 'arquivo baixado' : 'arquivos baixados'
+        } na ordem do Capítulo ${selectedChapter.chapterNumber}.`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível baixar os arquivos em sequência.'
+      );
+    } finally {
+      setDownloadingPages(false);
+      setDownloadProgress(null);
+    }
+  };
+
   const handleStartDownloadAllPages = () => {
     if (pages.length === 0 || downloadingPages || deletingAllPages) return;
     setConfirmDeleteAllPages(false);
-    if (chapterOrMangaHasMotion) {
-      setDownloadMotionPromptOpen((prev) => !prev);
-      return;
-    }
-    void handleDownloadChapterZip(false);
+    setDownloadMotionPromptOpen((prev) => !prev);
   };
 
   const handleDeleteAllPages = async () => {
@@ -1062,163 +1079,453 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         onClearFeedback={() => setFeedback(null)}
         onClearError={() => setError(null)}
       />
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/8 pb-6">
-        <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-white">
-            Estúdio do Criador
-          </h1>
-          <p className="text-sm text-zinc-400 mt-1">
-            Gerencie séries, capítulos isolados e páginas pareadas (Original + Motion).
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#111115] border border-white/8 overflow-x-auto max-w-full">
-            <button
-              type="button"
-              onClick={() => setStudioTab('works')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                studioTab === 'works'
-                  ? 'bg-[#E11D48] text-white'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Obras &amp; Capítulos
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setInteractionsMangaFilter('all');
-                setStudioTab('interactions');
-              }}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                studioTab === 'interactions'
-                  ? 'bg-[#E11D48] text-white'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Comentários &amp; Avaliações ({studioOverview.totalVisibleComments})
-            </button>
-            <button
-              type="button"
-              onClick={() => setStudioTab('monetization')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                studioTab === 'monetization'
-                  ? 'bg-[#E11D48] text-white'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Wallet className="w-3.5 h-3.5" />
-              Monetização &amp; Ganhos
-            </button>
-          </div>
-          {storageStatus && studioTab === 'works' && (
-            <span className="text-xs text-zinc-400">
-              Armazenamento:{' '}
-              <strong className="text-zinc-200">
-                {storageStatus.driver === 's3' ? 'Bucket S3/R2 Externo' : 'Servidor Gerenciado'}
-              </strong>
-            </span>
-          )}
-          {studioTab === 'works' && (
-            <button
-              type="button"
-              onClick={openCreateManga}
-              className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-sm font-semibold transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Nova Obra
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Highlighted Balance Panel + Creator Overview Strip */}
-      <section className="bg-[#111115] border border-white/10 rounded-2xl p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
-        <div className="lg:col-span-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 lg:border-r lg:border-white/8 lg:pr-5">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
-              <Wallet className="w-3.5 h-3.5 text-[#E11D48]" />
-              Saldo Disponível para Saque
-            </div>
-            <div className="font-mono-tabular text-2xl sm:text-3xl font-bold text-white">
-              {formatBRL(monetizationDashboard?.balance.availableCents ?? 0)}
-            </div>
-            <div className="text-[11px] font-mono-tabular text-zinc-400 flex flex-wrap gap-x-3 gap-y-0.5">
-              <span>
-                Pendente:{' '}
-                <strong className="text-zinc-200">
-                  {formatBRL(monetizationDashboard?.balance.pendingCents ?? 0)}
-                </strong>
-              </span>
-              <span>
-                Em análise:{' '}
-                <strong className="text-zinc-200">
-                  {formatBRL(monetizationDashboard?.balance.withdrawalPendingCents ?? 0)}
-                </strong>
-              </span>
-              <span>
-                Recebido:{' '}
-                <strong className="text-emerald-400">
-                  {formatBRL(monetizationDashboard?.balance.totalPaidCents ?? 0)}
-                </strong>
-              </span>
-            </div>
+      {/* Top Overview & Available Balance Hero */}
+      <section className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
+              Estúdio do Criador
+            </h1>
+            <p className="text-xs sm:text-sm text-zinc-400 mt-1">
+              Gerencie suas séries, capítulos e páginas pareadas em um só lugar.
+            </p>
           </div>
 
           <button
             type="button"
-            onClick={() => setStudioTab('monetization')}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-center"
+            onClick={openCreateManga}
+            className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-sm font-semibold shadow-sm shadow-rose-950/50 transition-colors shrink-0"
           >
-            {monetizationDashboard &&
-            monetizationDashboard.balance.availableCents >=
-              monetizationDashboard.settings.minWithdrawalCents
-              ? 'Sacar via Pix'
-              : 'Ver Monetização'}
+            <Plus className="w-4 h-4" />
+            Nova Obra
           </button>
         </div>
 
-        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-              <Eye className="w-3.5 h-3.5 text-zinc-500" />
-              Visualizações
+        {/* Harmonious Available Balance + Studio Metrics Card at the Very Top */}
+        <div className="bg-[#111115] border border-white/8 rounded-2xl p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
+          <div className="lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 lg:border-r lg:border-white/8 lg:pr-6">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                <Wallet className="w-3.5 h-3.5 text-[#E11D48]" />
+                Saldo Disponível para Saque
+              </div>
+              <div className="font-mono-tabular text-3xl sm:text-4xl font-bold text-white tracking-tight">
+                {formatBRL(monetizationDashboard?.balance.availableCents ?? 0)}
+              </div>
+              <div className="text-xs font-mono-tabular text-zinc-400 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <span>
+                  Pendente{' '}
+                  <strong className="text-zinc-200">
+                    {formatBRL(monetizationDashboard?.balance.pendingCents ?? 0)}
+                  </strong>
+                </span>
+                <span className="text-zinc-600">·</span>
+                <span>
+                  Em análise{' '}
+                  <strong className="text-zinc-200">
+                    {formatBRL(monetizationDashboard?.balance.withdrawalPendingCents ?? 0)}
+                  </strong>
+                </span>
+                <span className="text-zinc-600">·</span>
+                <span>
+                  Recebido{' '}
+                  <strong className="text-emerald-400">
+                    {formatBRL(monetizationDashboard?.balance.totalPaidCents ?? 0)}
+                  </strong>
+                </span>
+              </div>
             </div>
-            <div className="font-mono-tabular text-lg font-bold text-white">
-              {studioOverview.totalViews.toLocaleString('pt-BR')}
-            </div>
-            <div className="text-[11px] text-zinc-500">Nas {mangas.length} obras</div>
+
+            <button
+              type="button"
+              onClick={() => setStudioTab('monetization')}
+              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-white/8 hover:bg-white/14 border border-white/10 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-center"
+            >
+              {monetizationDashboard &&
+              monetizationDashboard.balance.availableCents >=
+                monetizationDashboard.settings.minWithdrawalCents
+                ? 'Sacar via Pix'
+                : 'Ver Monetização'}
+            </button>
           </div>
 
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-              <Users className="w-3.5 h-3.5 text-zinc-500" />
-              Seguidores
+          <div className="lg:col-span-6 grid grid-cols-3 gap-4 pt-3 border-t border-white/8 lg:pt-0 lg:border-t-0">
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <Eye className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                <span className="truncate">Visualizações</span>
+              </div>
+              <div className="font-mono-tabular text-lg sm:text-xl font-bold text-white">
+                {studioOverview.totalViews.toLocaleString('pt-BR')}
+              </div>
+              <div className="text-[11px] text-zinc-500 truncate">{mangas.length} obras</div>
             </div>
-            <div className="font-mono-tabular text-lg font-bold text-white">
-              {studioOverview.totalFollowers.toLocaleString('pt-BR')}
-            </div>
-            <div className="text-[11px] text-zinc-500">Do seu perfil</div>
-          </div>
 
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-              <Star className="w-3.5 h-3.5 text-amber-400" />
-              Nota Média
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <Users className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                <span className="truncate">Seguidores</span>
+              </div>
+              <div className="font-mono-tabular text-lg sm:text-xl font-bold text-white">
+                {studioOverview.totalFollowers.toLocaleString('pt-BR')}
+              </div>
+              <div className="text-[11px] text-zinc-500 truncate">No perfil</div>
             </div>
-            <div className="font-mono-tabular text-lg font-bold text-white">
-              {studioOverview.totalRatingsCount > 0 ? studioOverview.avgRating.toFixed(1) : '—'}
-            </div>
-            <div className="text-[11px] font-mono-tabular text-zinc-500">
-              {studioOverview.totalRatingsCount} avaliações
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <Star className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="truncate">Nota Média</span>
+              </div>
+              <div className="font-mono-tabular text-lg sm:text-xl font-bold text-white">
+                {studioOverview.totalRatingsCount > 0 ? studioOverview.avgRating.toFixed(1) : '—'}
+              </div>
+              <div className="text-[11px] font-mono-tabular text-zinc-500 truncate">
+                {studioOverview.totalRatingsCount} aval.
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Full-Width 3-Tab Navigation (zero horizontal scrolling on any screen) */}
+        <nav
+          aria-label="Seções do estúdio"
+          className="grid grid-cols-3 gap-1.5 p-1.5 rounded-2xl bg-[#111115] border border-white/8"
+        >
+          <button
+            type="button"
+            onClick={() => setStudioTab('works')}
+            className={`min-h-[44px] inline-flex items-center justify-center gap-2 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+              studioTab === 'works'
+                ? 'bg-[#E11D48] text-white shadow-sm shadow-rose-950/40'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
+            }`}
+          >
+            <Layers className="w-4 h-4 shrink-0" />
+            <span className="truncate sm:hidden">Obras</span>
+            <span className="hidden sm:inline truncate">Obras &amp; Capítulos</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setInteractionsMangaFilter('all');
+              setStudioTab('interactions');
+            }}
+            className={`min-h-[44px] inline-flex items-center justify-center gap-2 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+              studioTab === 'interactions'
+                ? 'bg-[#E11D48] text-white shadow-sm shadow-rose-950/40'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 shrink-0" />
+            <span className="truncate sm:hidden">
+              Coment. ({studioOverview.totalVisibleComments})
+            </span>
+            <span className="hidden sm:inline truncate">
+              Comentários &amp; Avaliações ({studioOverview.totalVisibleComments})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStudioTab('monetization')}
+            className={`min-h-[44px] inline-flex items-center justify-center gap-2 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+              studioTab === 'monetization'
+                ? 'bg-[#E11D48] text-white shadow-sm shadow-rose-950/40'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
+            }`}
+          >
+            <Wallet className="w-4 h-4 shrink-0" />
+            <span className="truncate sm:hidden">Ganhos</span>
+            <span className="hidden sm:inline truncate">Monetização &amp; Ganhos</span>
+          </button>
+        </nav>
       </section>
+
+      {/* Manga Create / Edit Modal Dialog */}
+      {showMangaForm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manga-form-modal-title"
+          onClick={handleCancelMangaForm}
+        >
+          <form
+            onSubmit={handleSaveManga}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-3xl max-h-[92vh] flex flex-col bg-[#111115] border border-white/12 rounded-2xl shadow-2xl overflow-hidden"
+          >
+            {/* Modal Sticky Header */}
+            <div className="flex items-start justify-between gap-4 px-5 sm:px-7 py-4 border-b border-white/8 bg-[#14141A] shrink-0">
+              <div>
+                <h2
+                  id="manga-form-modal-title"
+                  className="font-display text-lg sm:text-xl font-bold text-white"
+                >
+                  {editingMangaId ? 'Editar Obra' : 'Cadastrar Nova Obra'}
+                </h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Defina título, visibilidade, sinopse, gêneros e identidade visual.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelMangaForm}
+                aria-label="Fechar janela de obra"
+                className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-zinc-400 hover:text-white hover:bg-white/8 transition-colors shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Body */}
+            <div className="flex-1 overflow-y-auto px-5 sm:px-7 py-5 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    Título da Obra *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={140}
+                    autoFocus
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Ex: Crônicas de Kurogane"
+                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D48]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    Nome do Autor / Estúdio *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={80}
+                    value={authorName}
+                    onChange={(e) => setAuthorName(e.target.value)}
+                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    Classificação Indicativa
+                  </label>
+                  <select
+                    value={ageRating}
+                    onChange={(e) => setAgeRating(e.target.value as AgeRating)}
+                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
+                  >
+                    {AGE_RATINGS.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    Visibilidade / Status
+                  </label>
+                  <select
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as MangaStatus)}
+                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
+                  >
+                    <option value="draft">Privado (Só você vê no Estúdio)</option>
+                    <option value="pre_launch">Pré-lançamento (Capa e Sinopse visíveis)</option>
+                    <option value="ongoing">Lançado (Público no catálogo)</option>
+                    <option value="completed">Concluído (Público)</option>
+                    <option value="hiatus">Hiato (Público)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-zinc-300">Sinopse *</label>
+                  <span className="text-[11px] font-mono-tabular text-zinc-500">
+                    {synopsis.length}/3000
+                  </span>
+                </div>
+                <textarea
+                  rows={4}
+                  required
+                  maxLength={3000}
+                  value={synopsis}
+                  onChange={(e) => setSynopsis(e.target.value)}
+                  placeholder="Apresente a história, premissa e atmosfera da obra..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D48]"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-zinc-300">Gêneros</span>
+                  <span className="text-[11px] font-mono-tabular text-zinc-500">
+                    {genres.length}/6 selecionados
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {GENRE_OPTIONS.map((g) => {
+                    const selected = genres.includes(g);
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => {
+                          if (selected) {
+                            if (genres.length > 1) setGenres(genres.filter((item) => item !== g));
+                          } else if (genres.length < 6) {
+                            setGenres([...genres, g]);
+                          }
+                        }}
+                        className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          selected
+                            ? 'bg-[#E11D48] text-white'
+                            : 'bg-[#08080A] text-zinc-400 border border-white/10 hover:text-white'
+                        }`}
+                      >
+                        {g}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/8">
+                <div className="p-4 rounded-xl bg-[#08080A] border border-white/10 space-y-3">
+                  <div className="text-xs font-medium text-zinc-300">Capa Vertical (3:4)</div>
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-20 h-28 rounded-lg overflow-hidden bg-[#14141A] border border-white/10 flex items-center justify-center shrink-0">
+                      {coverUrl ? (
+                        <img
+                          src={coverUrl}
+                          alt="Prévia da capa"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="w-5 h-5 text-zinc-600" />
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2 min-w-0">
+                      <label className="min-h-[38px] inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
+                        <Upload className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">
+                          {coverUrl ? 'Trocar Capa' : 'Enviar Capa'}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void handleCoverUpload(f, 'cover');
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      {coverUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleClearMangaBrandImage('cover')}
+                          className="min-h-[34px] inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300 self-start"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-[#08080A] border border-white/10 space-y-3">
+                  <div className="text-xs font-medium text-zinc-300">
+                    Banner Horizontal (Opcional)
+                  </div>
+                  <div className="w-full h-20 rounded-lg overflow-hidden bg-[#14141A] border border-white/10 flex items-center justify-center">
+                    {bannerUrl ? (
+                      <img
+                        src={bannerUrl}
+                        alt="Prévia do banner"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-[11px] text-zinc-600">Sem banner horizontal</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="min-h-[38px] inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
+                      <Upload className="w-3.5 h-3.5 shrink-0" />
+                      {bannerUrl ? 'Trocar Banner' : 'Enviar Banner'}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleCoverUpload(f, 'banner');
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                    {bannerUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleClearMangaBrandImage('banner')}
+                        className="min-h-[38px] inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Remover
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {uploadProgress !== null && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-mono-tabular text-zinc-300">
+                    <span>Enviando imagem...</span>
+                    <span className="text-[#E11D48] font-semibold">{uploadProgress}%</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full bg-[#E11D48] transition-all duration-150"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Sticky Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 sm:px-7 py-4 border-t border-white/8 bg-[#14141A] shrink-0">
+              <button
+                type="button"
+                onClick={handleCancelMangaForm}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl text-sm text-zinc-300 hover:bg-white/6 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={savingManga}
+                className="min-h-[44px] px-6 py-2.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+              >
+                {savingManga ? 'Salvando...' : editingMangaId ? 'Salvar Alterações' : 'Criar Obra'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {studioTab === 'monetization' ? (
         <CreatorMonetizationPanel />
@@ -1237,235 +1544,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
         />
       ) : (
         <>
-
-      {/* Manga Create / Edit Form */}
-      {showMangaForm && (
-        <form
-          onSubmit={handleSaveManga}
-          className="bg-[#111115] border border-white/12 rounded-2xl p-5 sm:p-7 space-y-5"
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-xl font-bold text-white">
-              {editingMangaId ? 'Editar Obra' : 'Cadastrar Nova Obra'}
-            </h2>
-            <button
-              type="button"
-              onClick={handleCancelMangaForm}
-              className="text-xs text-zinc-400 hover:text-white"
-            >
-              Cancelar
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                Título da Obra *
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={140}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Ex: Crônicas de Kurogane"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                Nome do Autor / Estúdio *
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={80}
-                value={authorName}
-                onChange={(e) => setAuthorName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                Classificação Indicativa
-              </label>
-              <select
-                value={ageRating}
-                onChange={(e) => setAgeRating(e.target.value as AgeRating)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
-              >
-                {AGE_RATINGS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                Status da Publicação
-              </label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as MangaStatus)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
-              >
-                <option value="draft">Privado (Padrão — Só você vê no Estúdio)</option>
-                <option value="pre_launch">Pré-lançamento (Capa e Sinopse visíveis)</option>
-                <option value="ongoing">Lançado (Público no catálogo)</option>
-                <option value="completed">Concluído (Público)</option>
-                <option value="hiatus">Hiato (Público)</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">Sinopse *</label>
-            <textarea
-              rows={4}
-              required
-              maxLength={3000}
-              value={synopsis}
-              onChange={(e) => setSynopsis(e.target.value)}
-              placeholder="Apresente a história, premissa e atmosfera da obra..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#08080A] border border-white/10 text-sm text-white focus:outline-none focus:border-[#E11D48]"
-            />
-          </div>
-
-          <div>
-            <span className="block text-xs font-medium text-zinc-300 mb-2">
-              Gêneros (selecione até 6)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {GENRE_OPTIONS.map((g) => {
-                const selected = genres.includes(g);
-                return (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => {
-                      if (selected) {
-                        if (genres.length > 1) setGenres(genres.filter((item) => item !== g));
-                      } else if (genres.length < 6) {
-                        setGenres([...genres, g]);
-                      }
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      selected
-                        ? 'bg-[#E11D48] text-white'
-                        : 'bg-[#08080A] text-zinc-400 border border-white/10 hover:text-white'
-                    }`}
-                  >
-                    {g}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="p-4 rounded-xl bg-[#08080A] border border-white/10 space-y-2.5">
-              <div className="text-xs font-medium text-zinc-300">Capa Vertical (3:4)</div>
-              {coverUrl && (
-                <img
-                  src={coverUrl}
-                  alt="Prévia da capa"
-                  className="w-24 h-32 object-cover rounded-lg border border-white/10"
-                />
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
-                  <Upload className="w-3.5 h-3.5" />
-                  {coverUrl ? 'Trocar Capa' : 'Enviar Capa (JPG/PNG/WebP)'}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleCoverUpload(f, 'cover');
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
-                {coverUrl && (
-                  <button
-                    type="button"
-                    onClick={() => handleClearMangaBrandImage('cover')}
-                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Remover
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#08080A] border border-white/10 space-y-2.5">
-              <div className="text-xs font-medium text-zinc-300">Banner Horizontal (Opcional)</div>
-              {bannerUrl && (
-                <img
-                  src={bannerUrl}
-                  alt="Prévia do banner"
-                  className="w-full h-24 object-cover rounded-lg border border-white/10"
-                />
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white cursor-pointer">
-                  <Upload className="w-3.5 h-3.5" />
-                  {bannerUrl ? 'Trocar Banner' : 'Enviar Banner'}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleCoverUpload(f, 'banner');
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
-                {bannerUrl && (
-                  <button
-                    type="button"
-                    onClick={() => handleClearMangaBrandImage('banner')}
-                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-500/12 hover:bg-rose-500/20 text-xs font-medium text-rose-300"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Remover
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {uploadProgress !== null && (
-            <div className="text-xs text-zinc-300 font-mono-tabular">
-              Enviando arquivo: {uploadProgress}%
-            </div>
-          )}
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={handleCancelMangaForm}
-              className="px-4 py-2.5 rounded-xl text-sm text-zinc-300 hover:bg-white/5"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={savingManga}
-              className="px-6 py-2.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-sm font-semibold disabled:opacity-50"
-            >
-              {savingManga ? 'Salvando...' : editingMangaId ? 'Salvar Alterações' : 'Criar Obra'}
-            </button>
-          </div>
-        </form>
-      )}
 
       {/* Main Studio Workspace: Works -> Chapters -> Isolated Chapter Pages */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -1681,207 +1759,274 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
             </div>
           ) : (
             <>
-              {/* Private Preview Link & Visibility Card */}
-              {(() => {
-                const previewUrl =
-                  selectedManga.previewEnabled && selectedManga.previewKey
-                    ? `${window.location.origin}${
-                        window.location.pathname === '/' ? '' : window.location.pathname
-                      }#/preview/${selectedManga.previewKey}`
-                    : '';
-                const statusInfo =
-                  selectedManga.status === 'draft'
-                    ? {
-                        label: 'Privado (Padrão)',
-                        badgeClass: 'bg-zinc-800 text-zinc-200 border-white/10',
-                        hint: 'Visível apenas para você no Estúdio. Capítulos preparados ficam ocultos no catálogo público, mas podem ser lidos por quem tiver o link privado abaixo.',
-                      }
-                    : selectedManga.status === 'pre_launch'
+              {/* Private Preview Link Pop-up Modal (opened from compact icon button) */}
+              {showPreviewModal &&
+                (() => {
+                  const previewUrl =
+                    selectedManga.previewEnabled && selectedManga.previewKey
+                      ? `${window.location.origin}${
+                          window.location.pathname === '/' ? '' : window.location.pathname
+                        }#/preview/${selectedManga.previewKey}`
+                      : '';
+                  const statusInfo =
+                    selectedManga.status === 'draft'
                       ? {
-                          label: 'Pré-lançamento',
-                          badgeClass: 'bg-amber-400/15 text-amber-300 border-amber-400/30',
-                          hint: 'Capa e sinopse visíveis no catálogo antes do lançamento oficial. Ao publicar o primeiro capítulo, a obra será lançada automaticamente.',
+                          label: 'Privado',
+                          toneClass: 'text-zinc-200',
+                          hint: 'Visível apenas para você no Estúdio. Capítulos preparados ficam ocultos no catálogo público, mas podem ser lidos por quem tiver o link exclusivo abaixo.',
                         }
-                      : selectedManga.status === 'hiatus'
+                      : selectedManga.status === 'pre_launch'
                         ? {
-                            label: 'Hiato (Público)',
-                            badgeClass: 'bg-amber-500/15 text-amber-200 border-amber-500/30',
-                            hint: 'Obra pública no catálogo e no leitor.',
+                            label: 'Pré-lançamento',
+                            toneClass: 'text-amber-300',
+                            hint: 'Capa e sinopse visíveis no catálogo antes do lançamento oficial. Ao publicar o primeiro capítulo, a obra será lançada automaticamente.',
                           }
-                        : selectedManga.status === 'completed'
+                        : selectedManga.status === 'hiatus'
                           ? {
-                              label: 'Concluído (Público)',
-                              badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+                              label: 'Hiato (Público)',
+                              toneClass: 'text-amber-200',
                               hint: 'Obra pública no catálogo e no leitor.',
                             }
-                          : {
-                              label: 'Lançado (Público)',
-                              badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-                              hint: 'Obra pública no catálogo e no leitor.',
-                            };
+                          : selectedManga.status === 'completed'
+                            ? {
+                                label: 'Concluído (Público)',
+                                toneClass: 'text-emerald-300',
+                                hint: 'Obra pública no catálogo e no leitor.',
+                              }
+                            : {
+                                label: 'Lançado (Público)',
+                                toneClass: 'text-emerald-300',
+                                hint: 'Obra pública no catálogo e no leitor.',
+                              };
 
-                return (
-                  <div className="bg-[#111115] border border-white/8 rounded-2xl p-5 space-y-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center gap-1.5 text-sm font-display font-bold text-white">
-                            <Link2 className="w-4 h-4 text-[#E11D48]" />
-                            Visibilidade &amp; Link Privado de Prévia
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold ${statusInfo.badgeClass}`}
-                          >
-                            {statusInfo.label}
-                          </span>
-                        </div>
-                        <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl">
-                          {statusInfo.hint}
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => openEditManga(selectedManga)}
-                        className="px-3 py-1.5 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white shrink-0"
+                  return (
+                    <div
+                      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="preview-modal-title"
+                      onClick={() => setShowPreviewModal(false)}
+                    >
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full max-w-xl bg-[#111115] border border-white/12 rounded-2xl shadow-2xl overflow-hidden"
                       >
-                        Alterar Status
-                      </button>
-                    </div>
-
-                    {previewUrl ? (
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2.5 rounded-xl bg-[#08080A] border border-white/10">
-                        <input
-                          type="text"
-                          readOnly
-                          value={previewUrl}
-                          aria-label="URL do link privado de prévia"
-                          className="flex-1 bg-transparent text-xs font-mono-tabular text-zinc-200 px-2 py-1 focus:outline-none truncate"
-                        />
-                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-white/8 bg-[#14141A]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Link2 className="w-4 h-4 text-[#E11D48] shrink-0" />
+                            <h3
+                              id="preview-modal-title"
+                              className="font-display text-base sm:text-lg font-bold text-white truncate"
+                            >
+                              Visibilidade &amp; Link Privado de Prévia
+                            </h3>
+                          </div>
                           <button
                             type="button"
-                            onClick={() => {
-                              void navigator.clipboard.writeText(previewUrl).then(() => {
-                                setCopiedPreviewLink(true);
-                                setTimeout(() => setCopiedPreviewLink(false), 2000);
-                              });
-                            }}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-semibold transition-colors"
+                            onClick={() => setShowPreviewModal(false)}
+                            aria-label="Fechar janela de link privado"
+                            className="min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-xl text-zinc-400 hover:text-white hover:bg-white/8 transition-colors shrink-0"
                           >
-                            {copiedPreviewLink ? (
-                              <>
-                                <Check className="w-3.5 h-3.5" />
-                                Copiado!
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-3.5 h-3.5" />
-                                Copiar Link
-                              </>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onNavigate({
-                                name: 'preview',
-                                previewKey: selectedManga.previewKey || '',
-                              })
-                            }
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/8 hover:bg-white/15 text-zinc-200 text-xs font-medium transition-colors"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            Abrir Prévia
+                            <X className="w-4 h-4" />
                           </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="p-3 rounded-xl bg-[#08080A] border border-dashed border-white/12 text-xs text-zinc-400">
-                        Link privado revogado. Clique em &ldquo;Gerar Novo Link&rdquo; abaixo para
-                        criar um novo acesso exclusivo.
-                      </div>
-                    )}
 
-                    <div className="flex flex-col sm:flex-row sm:items-end gap-2.5">
-                      <div className="flex-1 min-w-0">
-                        <label className="block text-[11px] text-zinc-400 mb-1">
-                          Slug personalizado do link (isolado nesta obra)
-                        </label>
-                        <input
-                          type="text"
-                          value={previewSlugInput}
-                          maxLength={48}
-                          onChange={(e) => setPreviewSlugInput(e.target.value)}
-                          placeholder="ex: minha-obra-previa"
-                          className="w-full px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs font-mono-tabular text-white focus:outline-none focus:border-[#E11D48]"
-                        />
-                      </div>
+                        <div className="p-5 space-y-5">
+                          <div className="flex items-start justify-between gap-3 pb-4 border-b border-white/8">
+                            <div className="space-y-1">
+                              <div className="text-xs text-zinc-400">
+                                Status atual:{' '}
+                                <strong className={statusInfo.toneClass}>{statusInfo.label}</strong>
+                              </div>
+                              <p className="text-xs text-zinc-400 leading-relaxed">
+                                {statusInfo.hint}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPreviewModal(false);
+                                openEditManga(selectedManga);
+                              }}
+                              className="min-h-[36px] px-3 py-1.5 rounded-lg bg-white/8 hover:bg-white/15 text-xs font-medium text-white shrink-0"
+                            >
+                              Alterar Status
+                            </button>
+                          </div>
 
-                      <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        {selectedManga.previewEnabled && selectedManga.previewKey && (
-                          <button
-                            type="button"
-                            disabled={previewActionLoading !== null}
-                            onClick={() => void handlePreviewLinkAction('update_slug')}
-                            className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/18 text-white text-xs font-semibold disabled:opacity-50"
-                          >
-                            {previewActionLoading === 'update_slug' ? 'Salvando...' : 'Salvar Slug'}
-                          </button>
-                        )}
+                          {previewUrl ? (
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2.5 rounded-xl bg-[#08080A] border border-white/10">
+                              <input
+                                type="text"
+                                readOnly
+                                value={previewUrl}
+                                aria-label="URL do link privado de prévia"
+                                className="flex-1 bg-transparent text-xs font-mono-tabular text-zinc-200 px-2 py-1 focus:outline-none truncate"
+                              />
+                              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void navigator.clipboard.writeText(previewUrl).then(() => {
+                                      setCopiedPreviewLink(true);
+                                      setTimeout(() => setCopiedPreviewLink(false), 2000);
+                                    });
+                                  }}
+                                  className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-semibold transition-colors"
+                                >
+                                  {copiedPreviewLink ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5" />
+                                      Copiado!
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="w-3.5 h-3.5" />
+                                      Copiar Link
+                                    </>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowPreviewModal(false);
+                                    onNavigate({
+                                      name: 'preview',
+                                      previewKey: selectedManga.previewKey || '',
+                                    });
+                                  }}
+                                  className="min-h-[36px] inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/8 hover:bg-white/15 text-zinc-200 text-xs font-medium transition-colors"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  Abrir Prévia
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="p-3 rounded-xl bg-[#08080A] border border-dashed border-white/12 text-xs text-zinc-400">
+                              Link privado revogado. Clique em &ldquo;Gerar Novo Link&rdquo; abaixo
+                              para criar um novo acesso exclusivo.
+                            </div>
+                          )}
 
-                        <button
-                          type="button"
-                          disabled={previewActionLoading !== null}
-                          onClick={() => void handlePreviewLinkAction('regenerate')}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/8 hover:bg-white/15 text-zinc-100 text-xs font-semibold disabled:opacity-50"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          {previewActionLoading === 'regenerate'
-                            ? 'Gerando...'
-                            : 'Gerar Novo Link'}
-                        </button>
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-[11px] text-zinc-400 mb-1">
+                                Slug personalizado do link (isolado nesta obra)
+                              </label>
+                              <input
+                                type="text"
+                                value={previewSlugInput}
+                                maxLength={48}
+                                onChange={(e) => setPreviewSlugInput(e.target.value)}
+                                placeholder="ex: minha-obra-previa"
+                                className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs font-mono-tabular text-white focus:outline-none focus:border-[#E11D48]"
+                              />
+                            </div>
 
-                        {selectedManga.previewEnabled && selectedManga.previewKey && (
-                          <button
-                            type="button"
-                            disabled={previewActionLoading !== null}
-                            onClick={() => void handlePreviewLinkAction('revoke')}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/12 hover:bg-rose-500/22 border border-rose-500/25 text-rose-300 text-xs font-semibold disabled:opacity-50"
-                          >
-                            <ShieldOff className="w-3.5 h-3.5" />
-                            {previewActionLoading === 'revoke' ? 'Revogando...' : 'Revogar Link'}
-                          </button>
-                        )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              {selectedManga.previewEnabled && selectedManga.previewKey && (
+                                <button
+                                  type="button"
+                                  disabled={previewActionLoading !== null}
+                                  onClick={() => void handlePreviewLinkAction('update_slug')}
+                                  className="min-h-[38px] px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/18 text-white text-xs font-semibold disabled:opacity-50"
+                                >
+                                  {previewActionLoading === 'update_slug'
+                                    ? 'Salvando...'
+                                    : 'Salvar Slug'}
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                disabled={previewActionLoading !== null}
+                                onClick={() => void handlePreviewLinkAction('regenerate')}
+                                className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/8 hover:bg-white/15 text-zinc-100 text-xs font-semibold disabled:opacity-50"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                {previewActionLoading === 'regenerate'
+                                  ? 'Gerando...'
+                                  : 'Gerar Novo Link'}
+                              </button>
+
+                              {selectedManga.previewEnabled && selectedManga.previewKey && (
+                                <button
+                                  type="button"
+                                  disabled={previewActionLoading !== null}
+                                  onClick={() => void handlePreviewLinkAction('revoke')}
+                                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/12 hover:bg-rose-500/22 border border-rose-500/25 text-rose-300 text-xs font-semibold disabled:opacity-50"
+                                >
+                                  <ShieldOff className="w-3.5 h-3.5" />
+                                  {previewActionLoading === 'revoke'
+                                    ? 'Revogando...'
+                                    : 'Revogar Link'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })()}
+                  );
+                })()}
 
               {/* Chapters Manager */}
               <div className="bg-[#111115] border border-white/8 rounded-2xl p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-display text-lg font-bold text-white">
-                      Capítulos de {selectedManga.title}
-                    </h2>
-                    <p className="text-xs text-zinc-400">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                      <h2 className="font-display text-lg font-bold text-white">
+                        Capítulos de {selectedManga.title}
+                      </h2>
+                      <span className="text-xs text-zinc-400">
+                        ·{' '}
+                        {selectedManga.status === 'draft'
+                          ? 'Privado'
+                          : selectedManga.status === 'pre_launch'
+                            ? 'Pré-lançamento'
+                            : selectedManga.status === 'hiatus'
+                              ? 'Hiato'
+                              : selectedManga.status === 'completed'
+                                ? 'Concluído'
+                                : 'Público'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-0.5">
                       Salve em rascunho enquanto envia as páginas ou publique quando estiver pronto.
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInteractionsMangaFilter(selectedManga.id);
-                      setStudioTab('interactions');
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/8 hover:bg-white/14 text-xs font-semibold text-white transition-colors"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5 text-[#E11D48]" />
-                    Ver Comentários da Obra ({selectedMangaCommentsCount})
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowPreviewModal(true)}
+                      title="Gerenciar link privado de prévia e visibilidade"
+                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/8 hover:bg-white/14 text-xs font-semibold text-white transition-colors"
+                    >
+                      <Link2 className="w-3.5 h-3.5 text-[#E11D48]" />
+                      <span>Link de Prévia</span>
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          selectedManga.previewEnabled && selectedManga.previewKey
+                            ? 'bg-emerald-400'
+                            : 'bg-zinc-500'
+                        }`}
+                      />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInteractionsMangaFilter(selectedManga.id);
+                        setStudioTab('interactions');
+                      }}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/8 hover:bg-white/14 text-xs font-semibold text-white transition-colors"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 text-[#E11D48]" />
+                      <span>Comentários ({selectedMangaCommentsCount})</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Selected Work Performance Strip */}
@@ -2191,44 +2336,110 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                     </div>
                   </div>
 
-                  {downloadMotionPromptOpen && chapterOrMangaHasMotion && (
-                    <div className="p-3.5 rounded-xl bg-[#181822] border border-white/12 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="space-y-0.5">
-                        <div className="text-xs font-semibold text-white flex items-center gap-1.5">
-                          <Film className="w-3.5 h-3.5 text-[#E11D48]" />
-                          Este capítulo possui páginas com Motion ({motionPagesCount})
+                  {downloadMotionPromptOpen && (
+                    <div className="p-4 rounded-xl bg-[#181822] border border-white/12 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                            <Download className="w-3.5 h-3.5 text-[#E11D48]" />
+                            Baixar todas as páginas na ordem (Cap. {selectedChapter.chapterNumber})
+                          </div>
+                          <p className="text-[11px] text-zinc-400">
+                            Os arquivos são nomeados em sequência exata: C{selectedChapter.chapterNumber}-pagina-001, C{selectedChapter.chapterNumber}-pagina-002...
+                          </p>
                         </div>
-                        <p className="text-[11px] text-zinc-400">
-                          Escolha se deseja baixar apenas as imagens normais ou incluir também os
-                          arquivos Motion no pacote .zip.
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          disabled={downloadingPages}
-                          onClick={() => void handleDownloadChapterZip(false)}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
-                        >
-                          <ImageIcon className="w-3.5 h-3.5" />
-                          Somente Normais ({pages.length})
-                        </button>
-                        <button
-                          type="button"
-                          disabled={downloadingPages}
-                          onClick={() => void handleDownloadChapterZip(true)}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-xs font-semibold text-white disabled:opacity-50"
-                        >
-                          <Film className="w-3.5 h-3.5" />
-                          Normais + Motion ({pages.length + motionPagesCount})
-                        </button>
                         <button
                           type="button"
                           onClick={() => setDownloadMotionPromptOpen(false)}
-                          className="px-2.5 py-2 rounded-lg text-xs text-zinc-400 hover:text-white"
+                          className="p-1.5 rounded-lg text-zinc-400 hover:text-white"
+                          aria-label="Fechar opções de download"
                         >
-                          Cancelar
+                          <X className="w-4 h-4" />
                         </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                            Pacote ZIP Organizado
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={downloadingPages}
+                              onClick={() => void handleDownloadChapterZip('normals')}
+                              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              ZIP Normais ({pages.length})
+                            </button>
+                            {chapterOrMangaHasMotion && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={downloadingPages}
+                                  onClick={() => void handleDownloadChapterZip('with_motion')}
+                                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-xs font-semibold text-white disabled:opacity-50"
+                                >
+                                  <Film className="w-3.5 h-3.5" />
+                                  ZIP + Motion ({pages.length + motionPagesCount})
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={downloadingPages}
+                                  onClick={() => void handleDownloadChapterZip('motion_only')}
+                                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                                >
+                                  <Film className="w-3.5 h-3.5 text-[#E11D48]" />
+                                  ZIP Só Motion ({motionPagesCount})
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                            Direto 1 por 1 (Na Ordem)
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={downloadingPages}
+                              onClick={() => void handleDownloadChapterSequential('normals')}
+                              className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              1 por 1 Normais
+                            </button>
+                            {chapterOrMangaHasMotion && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={downloadingPages}
+                                  onClick={() =>
+                                    void handleDownloadChapterSequential('with_motion')
+                                  }
+                                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                                >
+                                  <Film className="w-3.5 h-3.5 text-[#E11D48]" />
+                                  1 por 1 + Motion
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={downloadingPages}
+                                  onClick={() =>
+                                    void handleDownloadChapterSequential('motion_only')
+                                  }
+                                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/18 text-xs font-medium text-white disabled:opacity-50"
+                                >
+                                  <Film className="w-3.5 h-3.5" />
+                                  1 por 1 Só Motion
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2393,21 +2604,21 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                           className="p-3.5 rounded-xl bg-[#0B0B0E] border border-white/8 space-y-3"
                         >
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            <div className="flex items-center gap-4">
-                              <span className="font-mono-tabular text-xs font-bold text-zinc-400 w-10">
+                            <div className="flex items-start gap-4">
+                              <span className="font-mono-tabular text-xs font-bold text-zinc-400 w-9 shrink-0 pt-9">
                                 #{p.pageNumber}
                               </span>
 
                               {/* Original Thumbnail */}
-                              <div className="space-y-1">
-                                <div className="w-16 h-22 rounded-lg overflow-hidden bg-[#16161C] border border-white/10">
+                              <div className="w-16 shrink-0 space-y-1.5">
+                                <div className="w-16 h-24 rounded-lg overflow-hidden bg-[#16161C] border border-white/10">
                                   <img
                                     src={p.originalUrl}
                                     alt={`Pág. ${p.pageNumber} original`}
                                     className="w-full h-full object-cover"
                                   />
                                 </div>
-                                <label className="block text-[10px] text-zinc-400 hover:text-white cursor-pointer text-center">
+                                <label className="block text-[11px] font-medium text-zinc-300 hover:text-white cursor-pointer text-center leading-tight">
                                   Trocar Orig.
                                   <input
                                     type="file"
@@ -2423,8 +2634,8 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                               </div>
 
                               {/* Motion Thumbnail */}
-                              <div className="space-y-1">
-                                <div className="w-16 h-22 rounded-lg overflow-hidden bg-[#16161C] border border-white/10 flex items-center justify-center">
+                              <div className="w-16 shrink-0 space-y-1.5">
+                                <div className="w-16 h-24 rounded-lg overflow-hidden bg-[#16161C] border border-white/10 flex items-center justify-center">
                                   {p.motionUrl ? (
                                     p.motionMime.startsWith('video/') ? (
                                       <video
@@ -2446,7 +2657,7 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                                     <Film className="w-4 h-4 text-zinc-600" />
                                   )}
                                 </div>
-                                <label className="block text-[10px] text-[#E11D48] hover:underline cursor-pointer text-center">
+                                <label className="block text-[11px] font-medium text-[#FB7185] hover:underline cursor-pointer text-center leading-tight">
                                   {p.motionUrl ? 'Trocar Motion' : '+ Motion'}
                                   <input
                                     type="file"
@@ -2459,16 +2670,6 @@ export function CreatorStudioPage({ onNavigate, onOpenAuth }: CreatorStudioPageP
                                     }}
                                   />
                                 </label>
-                                {p.motionUrl && (
-                                  <button
-                                    type="button"
-                                    disabled={deletingId === p.id}
-                                    onClick={() => void handleRemovePageMotion(p)}
-                                    className="block w-full text-[10px] text-zinc-400 hover:text-rose-400 text-center disabled:opacity-40"
-                                  >
-                                    Remover Motion
-                                  </button>
-                                )}
                               </div>
                             </div>
 

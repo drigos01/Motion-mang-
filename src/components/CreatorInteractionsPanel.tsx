@@ -3,6 +3,7 @@ import {
   Eye,
   EyeOff,
   MessageSquare,
+  Pencil,
   RefreshCw,
   Reply,
   Send,
@@ -17,6 +18,7 @@ import {
   deleteChapterComment,
   postChapterComment,
   setChapterCommentHidden,
+  updateChapterCommentContent,
 } from '../services/mangaService';
 import { ChapterComment, Manga, MAX_LIMITS } from '../types/manga';
 
@@ -33,9 +35,24 @@ interface CreatorInteractionsPanelProps {
   onNavigate: (route: AppRoute) => void;
 }
 
-function formatTs(ts: unknown): string {
+function getTsMillis(ts: unknown): number {
   if (ts && typeof ts === 'object' && 'toMillis' in ts && typeof (ts as { toMillis: () => number }).toMillis === 'function') {
-    return new Date((ts as { toMillis: () => number }).toMillis()).toLocaleString('pt-BR', {
+    return (ts as { toMillis: () => number }).toMillis();
+  }
+  return 0;
+}
+
+function wasCommentEdited(c: ChapterComment): boolean {
+  if (c.isHidden) return false;
+  const created = getTsMillis(c.createdAt);
+  const updated = getTsMillis(c.updatedAt);
+  return created > 0 && updated > created + 1500;
+}
+
+function formatTs(ts: unknown): string {
+  const millis = getTsMillis(ts);
+  if (millis > 0) {
+    return new Date(millis).toLocaleString('pt-BR', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -66,6 +83,9 @@ export function CreatorInteractionsPanel({
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState('');
   const [submittingReply, setSubmittingReply] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -179,12 +199,31 @@ export function CreatorInteractionsPanel({
     }
   };
 
+  const handleSaveEdit = async (e: React.FormEvent, item: CreatorStudioCommentItem) => {
+    e.preventDefault();
+    if (!editDraft.trim() || savingEdit) return;
+    setSavingEdit(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      await updateChapterCommentContent(item.manga.id, item.chapter.id, item.comment.id, editDraft);
+      setEditingId(null);
+      setEditDraft('');
+      setFeedback('Comentário atualizado.');
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao editar comentário.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleDeleteComment = async (item: CreatorStudioCommentItem) => {
     const c = item.comment;
     setActionBusyId(c.id);
     setError(null);
     try {
-      await deleteChapterComment(item.manga.id, item.chapter.id, c.id);
+      await deleteChapterComment(item.manga.id, item.chapter.id, c.id, !c.parentId);
       setConfirmDeleteId(null);
       setFeedback('Comentário removido permanentemente.');
       await onRefresh();
@@ -195,32 +234,44 @@ export function CreatorInteractionsPanel({
     }
   };
 
-  const renderCommentRow = (item: CreatorStudioCommentItem, isNested = false) => {
+  const renderCommentRow = (
+    item: CreatorStudioCommentItem,
+    isReply = false,
+    hasAuthorReply = false
+  ) => {
     const c: ChapterComment = item.comment;
     const isAuthor = Boolean(c.isAuthorReply || c.userId === userId);
     const isBusy = actionBusyId === c.id;
     const isReplyingHere = replyingToId === c.id;
+    const isEditingHere = editingId === c.id;
+    const canEdit = c.userId === userId && !c.isHidden;
+    const edited = wasCommentEdited(c);
 
     return (
       <div
         key={c.id}
-        className={`space-y-2.5 ${
-          isNested ? 'pt-3 border-t border-white/6' : ''
-        } ${c.isHidden ? 'opacity-65' : ''}`}
+        className={`space-y-2.5 ${isReply ? 'pt-3 border-t border-white/6' : ''} ${
+          c.isHidden ? 'opacity-65' : ''
+        }`}
       >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0 space-y-0.5">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="font-semibold text-white">{c.userName}</span>
               {isAuthor && (
                 <span className="text-[11px] font-semibold text-[#FB7185]">Autor</span>
               )}
               {c.replyToUserName && (
+                <span className="text-zinc-400">▸ {c.replyToUserName}</span>
+              )}
+              {!isReply && hasAuthorReply && (
                 <>
                   <span className="text-zinc-600" aria-hidden="true">
                     ·
                   </span>
-                  <span className="text-zinc-400">em resposta a {c.replyToUserName}</span>
+                  <span className="text-[11px] font-medium text-emerald-400">
+                    Respondido pelo autor
+                  </span>
                 </>
               )}
               {c.isHidden && (
@@ -233,7 +284,7 @@ export function CreatorInteractionsPanel({
               )}
             </div>
 
-            {!isNested && (
+            {!isReply && (
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
                 <span className="text-zinc-300 font-medium">{item.manga.title}</span>
                 <span aria-hidden="true">·</span>
@@ -244,6 +295,7 @@ export function CreatorInteractionsPanel({
                       name: 'reader',
                       mangaId: item.manga.id,
                       chapterId: item.chapter.id,
+                      openComments: true,
                     })
                   }
                   className="text-[#E11D48] hover:underline font-mono-tabular"
@@ -251,13 +303,17 @@ export function CreatorInteractionsPanel({
                   Cap. {item.chapter.chapterNumber}: {item.chapter.title}
                 </button>
                 <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular text-zinc-500">{formatTs(c.createdAt)}</span>
+                <span className="font-mono-tabular text-zinc-500">
+                  {formatTs(c.createdAt)}
+                  {edited ? ' · editado' : ''}
+                </span>
               </div>
             )}
 
-            {isNested && (
+            {isReply && (
               <div className="text-[11px] font-mono-tabular text-zinc-500">
                 {formatTs(c.createdAt)}
+                {edited ? ' · editado' : ''}
               </div>
             )}
           </div>
@@ -266,6 +322,7 @@ export function CreatorInteractionsPanel({
             <button
               type="button"
               onClick={() => {
+                setEditingId(null);
                 setReplyingToId(isReplyingHere ? null : c.id);
                 setReplyDraft('');
               }}
@@ -274,6 +331,23 @@ export function CreatorInteractionsPanel({
               <Reply className="w-3.5 h-3.5" />
               Responder
             </button>
+
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReplyingToId(null);
+                  setConfirmDeleteId(null);
+                  setEditingId(isEditingHere ? null : c.id);
+                  setEditDraft(c.content);
+                }}
+                aria-label="Editar comentário"
+                title="Editar comentário"
+                className="p-1.5 rounded-lg bg-white/6 hover:bg-white/12 text-zinc-300 hover:text-white"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
 
             <button
               type="button"
@@ -318,7 +392,42 @@ export function CreatorInteractionsPanel({
           </div>
         </div>
 
-        <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">{c.content}</p>
+        {isEditingHere ? (
+          <form
+            onSubmit={(e) => void handleSaveEdit(e, item)}
+            className="pt-1 flex flex-col sm:flex-row gap-2"
+          >
+            <input
+              type="text"
+              maxLength={MAX_LIMITS.COMMENT_CONTENT}
+              value={editDraft}
+              onChange={(e) => setEditDraft(e.target.value)}
+              autoFocus
+              className="flex-1 min-h-[40px] px-3.5 rounded-xl bg-[#08080A] border border-white/15 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-[#E11D48]"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                disabled={savingEdit || !editDraft.trim()}
+                className="min-h-[40px] px-4 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-semibold disabled:opacity-40"
+              >
+                {savingEdit ? 'Salvando...' : 'Salvar'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(null);
+                  setEditDraft('');
+                }}
+                className="min-h-[40px] px-3 rounded-xl bg-white/6 text-xs text-zinc-300"
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">{c.content}</p>
+        )}
 
         {isReplyingHere && (
           <form
@@ -361,50 +470,56 @@ export function CreatorInteractionsPanel({
     <div className="space-y-6">
       {/* Toolbar & Filters */}
       <div className="bg-[#111115] border border-white/8 rounded-2xl p-4 sm:p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#08080A] border border-white/8 self-start">
-            <button
-              type="button"
-              onClick={() => setSubTab('comments')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                subTab === 'comments'
-                  ? 'bg-[#E11D48] text-white'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Comentários ({comments.filter((c) => !c.comment.isHidden).length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubTab('ratings')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                subTab === 'ratings'
-                  ? 'bg-[#E11D48] text-white'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <Star className="w-3.5 h-3.5" />
-              Avaliações ({ratings.length})
-            </button>
-          </div>
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="grid grid-cols-2 flex-1 sm:flex-none p-1 rounded-xl bg-[#08080A] border border-white/8">
+              <button
+                type="button"
+                onClick={() => setSubTab('comments')}
+                className={`min-h-[38px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  subTab === 'comments'
+                    ? 'bg-[#E11D48] text-white'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                <span>Comentários ({comments.filter((c) => !c.comment.isHidden).length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('ratings')}
+                className={`min-h-[38px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  subTab === 'ratings'
+                    ? 'bg-[#E11D48] text-white'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Star className="w-3.5 h-3.5 shrink-0" />
+                <span>Avaliações ({ratings.length})</span>
+              </button>
+            </div>
 
-          <div className="flex items-center gap-3">
-            {unansweredCount > 0 && (
-              <span className="text-xs text-amber-300 font-mono-tabular">
-                {unansweredCount} sem resposta do autor
-              </span>
-            )}
             <button
               type="button"
               disabled={loading}
               onClick={() => void onRefresh()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/8 hover:bg-white/12 text-xs font-medium text-white disabled:opacity-50"
+              aria-label="Atualizar comentários e avaliações"
+              title="Atualizar"
+              className="min-h-[42px] shrink-0 inline-flex items-center justify-center gap-1.5 px-3 sm:px-3.5 rounded-xl bg-white/8 hover:bg-white/12 text-xs font-medium text-white disabled:opacity-50 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              Atualizar
+              <span className="hidden sm:inline">Atualizar</span>
             </button>
           </div>
+
+          {unansweredCount > 0 && subTab === 'comments' && (
+            <p className="text-xs text-amber-300 font-mono-tabular">
+              {unansweredCount}{' '}
+              {unansweredCount === 1
+                ? 'comentário aguardando resposta do autor'
+                : 'comentários aguardando resposta do autor'}
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -416,7 +531,7 @@ export function CreatorInteractionsPanel({
                 setMangaFilter(e.target.value);
                 setChapterFilter('all');
               }}
-              className="w-full px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48]"
+              className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48]"
             >
               <option value="all">Todas as minhas obras</option>
               {mangas.map((m) => (
@@ -437,7 +552,7 @@ export function CreatorInteractionsPanel({
                   value={chapterFilter}
                   disabled={mangaFilter === 'all'}
                   onChange={(e) => setChapterFilter(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48] disabled:opacity-45"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48] disabled:opacity-45"
                 >
                   <option value="all">Todos os capítulos</option>
                   {chapterOptions.map((ch) => (
@@ -455,7 +570,7 @@ export function CreatorInteractionsPanel({
                   onChange={(e) =>
                     setStatusFilter(e.target.value as 'all' | 'unanswered' | 'hidden')
                   }
-                  className="w-full px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48]"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#08080A] border border-white/10 text-xs text-white focus:outline-none focus:border-[#E11D48]"
                 >
                   <option value="all">Todos os comentários</option>
                   <option value="unanswered">Aguardando resposta do autor</option>
@@ -494,13 +609,16 @@ export function CreatorInteractionsPanel({
           <div className="bg-[#111115] border border-white/8 rounded-2xl divide-y divide-white/8">
             {filteredTopComments.map((item) => {
               const replies = repliesByParentId.get(item.comment.id) || [];
+              const hasAuthorReply = replies.some(
+                (r) => r.comment.isAuthorReply || r.comment.userId === userId
+              );
               return (
-                <div key={item.comment.id} className="p-4 sm:p-5 space-y-4">
-                  {renderCommentRow(item, false)}
+                <div key={item.comment.id} className="p-4 sm:p-5 space-y-3">
+                  {renderCommentRow(item, false, hasAuthorReply)}
 
                   {replies.length > 0 && (
-                    <div className="ml-4 sm:ml-6 pl-4 border-l border-white/10 space-y-3">
-                      {replies.map((reply) => renderCommentRow(reply, true))}
+                    <div className="pl-4 sm:pl-6 space-y-3">
+                      {replies.map((reply) => renderCommentRow(reply, true, false))}
                     </div>
                   )}
                 </div>

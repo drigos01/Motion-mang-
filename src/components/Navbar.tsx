@@ -21,7 +21,13 @@ export type AppRoute =
   | { name: 'explore'; genre?: string; query?: string }
   | { name: 'manga'; mangaId: string }
   | { name: 'preview'; previewKey: string }
-  | { name: 'reader'; mangaId: string; chapterId: string; initialPage?: number }
+  | {
+      name: 'reader';
+      mangaId: string;
+      chapterId: string;
+      initialPage?: number;
+      openComments?: boolean;
+    }
   | { name: 'preview_reader'; previewKey: string; chapterId: string; initialPage?: number }
   | { name: 'creator' }
   | { name: 'library' }
@@ -180,6 +186,7 @@ export function Navbar({ route, onNavigate, onOpenAuth }: NavbarProps) {
                                   name: 'reader',
                                   mangaId: n.linkMangaId,
                                   chapterId: n.linkChapterId,
+                                  openComments: n.type === 'new_comment',
                                 });
                               } else if (n.linkMangaId) {
                                 onNavigate({ name: 'manga', mangaId: n.linkMangaId });

@@ -191,33 +191,53 @@ export function sanitizeArchiveSlug(value: string, fallback = 'capitulo'): strin
   return cleaned || fallback;
 }
 
+export type DownloadMediaMode = 'normals' | 'with_motion' | 'motion_only';
+
 export function planChapterPageDownloads(
   pages: ChapterPage[],
-  includeMotion: boolean
+  includeMotion: boolean,
+  options?: {
+    chapterNumber?: number;
+    mode?: DownloadMediaMode;
+  }
 ): PlannedPageDownload[] {
-  const ordered = [...pages].sort((a, b) => a.pageNumber - b.pageNumber);
+  const ordered = pages
+    .map((page, index) => ({ page, index }))
+    .sort((a, b) => {
+      const diff = (a.page.pageNumber || 0) - (b.page.pageNumber || 0);
+      return diff !== 0 ? diff : a.index - b.index;
+    })
+    .map((item) => item.page);
+
   const padWidth = Math.max(3, String(ordered.length).length);
+  const mode: DownloadMediaMode = options?.mode ?? (includeMotion ? 'with_motion' : 'normals');
+  const hasChapterNum =
+    options?.chapterNumber !== undefined && Number.isFinite(options.chapterNumber);
+  const chapterPrefix = hasChapterNum ? `C${options!.chapterNumber}-` : '';
+
   const planned: PlannedPageDownload[] = [];
 
   for (let i = 0; i < ordered.length; i++) {
     const page = ordered[i];
-    const num = String(page.pageNumber || i + 1).padStart(padWidth, '0');
-    if (page.originalUrl) {
+    const pageSeq = page.pageNumber && page.pageNumber > 0 ? page.pageNumber : i + 1;
+    const num = String(pageSeq).padStart(padWidth, '0');
+
+    if (mode !== 'motion_only' && page.originalUrl) {
       const origExt = inferFileExtension(page.originalMime, page.originalUrl, '.jpg');
       planned.push({
         url: page.originalUrl,
-        filename: `pagina-${num}${origExt}`,
+        filename: `${chapterPrefix}pagina-${num}${origExt}`,
         kind: 'original',
-        pageNumber: page.pageNumber,
+        pageNumber: pageSeq,
       });
     }
-    if (includeMotion && page.motionUrl) {
+    if ((mode === 'with_motion' || mode === 'motion_only') && page.motionUrl) {
       const motionExt = inferFileExtension(page.motionMime, page.motionUrl, '.mp4');
       planned.push({
         url: page.motionUrl,
-        filename: `pagina-${num}-motion${motionExt}`,
+        filename: `${chapterPrefix}pagina-${num}-motion${motionExt}`,
         kind: 'motion',
-        pageNumber: page.pageNumber,
+        pageNumber: pageSeq,
       });
     }
   }
@@ -230,9 +250,15 @@ export async function downloadChapterPagesZip(params: {
   chapterNumber: number;
   pages: ChapterPage[];
   includeMotion: boolean;
+  mode?: DownloadMediaMode;
   onProgress?: (progress: ZipDownloadProgress) => void;
 }): Promise<{ filesCount: number; zipFilename: string }> {
-  const planned = planChapterPageDownloads(params.pages, params.includeMotion);
+  const mode: DownloadMediaMode =
+    params.mode ?? (params.includeMotion ? 'with_motion' : 'normals');
+  const planned = planChapterPageDownloads(params.pages, params.includeMotion, {
+    chapterNumber: params.chapterNumber,
+    mode,
+  });
   if (planned.length === 0) {
     throw new Error('Nenhuma página disponível para download neste capítulo.');
   }
@@ -276,8 +302,13 @@ export async function downloadChapterPagesZip(params: {
   const zipBytes = buildStoreZip(entries);
   const zipBlob = new Blob([zipBytes], { type: 'application/zip' });
   const slug = sanitizeArchiveSlug(params.mangaTitle, 'manga');
-  const suffix = params.includeMotion ? 'originais-motion' : 'originais';
-  const zipFilename = `${slug}-cap-${params.chapterNumber}-${suffix}.zip`;
+  const suffix =
+    mode === 'motion_only'
+      ? 'somente-motion'
+      : mode === 'with_motion'
+        ? 'originais-motion'
+        : 'originais';
+  const zipFilename = `${slug}-C${params.chapterNumber}-${suffix}.zip`;
 
   const objectUrl = URL.createObjectURL(zipBlob);
   try {
@@ -296,4 +327,72 @@ export async function downloadChapterPagesZip(params: {
   }
 
   return { filesCount: entries.length, zipFilename };
+}
+
+export async function downloadChapterPagesSequential(params: {
+  chapterNumber: number;
+  pages: ChapterPage[];
+  mode: DownloadMediaMode;
+  onProgress?: (progress: ZipDownloadProgress) => void;
+}): Promise<{ filesCount: number }> {
+  const planned = planChapterPageDownloads(
+    params.pages,
+    params.mode === 'with_motion',
+    {
+      chapterNumber: params.chapterNumber,
+      mode: params.mode,
+    }
+  );
+  if (planned.length === 0) {
+    throw new Error('Nenhuma página disponível para download neste capítulo.');
+  }
+
+  for (let i = 0; i < planned.length; i++) {
+    const item = planned[i];
+    params.onProgress?.({
+      completed: i,
+      total: planned.length,
+      currentFilename: item.filename,
+    });
+
+    const response = await fetch(item.url, { credentials: 'same-origin' });
+    if (!response.ok) {
+      throw new Error(
+        `Falha ao baixar ${item.filename} (HTTP ${response.status}). Tente novamente.`
+      );
+    }
+
+    const blob = await response.blob();
+    const contentType = response.headers.get('content-type') || blob.type || undefined;
+    const finalName =
+      item.filename.includes('.') || !contentType
+        ? item.filename
+        : `${item.filename}${inferFileExtension(contentType, item.url, '')}`;
+
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = finalName;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 2000);
+
+    params.onProgress?.({
+      completed: i + 1,
+      total: planned.length,
+      currentFilename: finalName,
+    });
+
+    if (i < planned.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 260));
+    }
+  }
+
+  return { filesCount: planned.length };
 }

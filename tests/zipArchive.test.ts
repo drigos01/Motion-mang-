@@ -95,4 +95,22 @@ test('planChapterPageDownloads filters motion files based on includeMotion flag'
     withMotion.map((x) => x.filename),
     ['pagina-001.jpg', 'pagina-001-motion.mp4', 'pagina-002.png']
   );
+
+  const chapterOrdered = planChapterPageDownloads(samplePages, true, {
+    chapterNumber: 1,
+    mode: 'with_motion',
+  });
+  assert.deepEqual(
+    chapterOrdered.map((x) => x.filename),
+    ['C1-pagina-001.jpg', 'C1-pagina-001-motion.mp4', 'C1-pagina-002.png']
+  );
+
+  const motionOnly = planChapterPageDownloads(samplePages, false, {
+    chapterNumber: 1,
+    mode: 'motion_only',
+  });
+  assert.deepEqual(
+    motionOnly.map((x) => x.filename),
+    ['C1-pagina-001-motion.mp4']
+  );
 });

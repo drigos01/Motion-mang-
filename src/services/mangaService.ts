@@ -2103,6 +2103,28 @@ export async function postChapterComment(params: {
   }
 }
 
+export async function updateChapterCommentContent(
+  mangaId: string,
+  chapterId: string,
+  commentId: string,
+  content: string
+): Promise<string> {
+  const path = `mangas/${mangaId}/chapters/${chapterId}/comments/${commentId}`;
+  const trimmed = content.trim().slice(0, MAX_LIMITS.COMMENT_CONTENT);
+  if (!trimmed) {
+    throw new Error('O comentário não pode ficar vazio.');
+  }
+  try {
+    await updateDoc(doc(db, 'mangas', mangaId, 'chapters', chapterId, 'comments', commentId), {
+      content: trimmed,
+      updatedAt: serverTimestamp(),
+    });
+    return trimmed;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
 export async function setChapterCommentHidden(
   mangaId: string,
   chapterId: string,
@@ -2123,10 +2145,30 @@ export async function setChapterCommentHidden(
 export async function deleteChapterComment(
   mangaId: string,
   chapterId: string,
-  commentId: string
+  commentId: string,
+  canDeleteThreadReplies = false
 ): Promise<void> {
   const path = `mangas/${mangaId}/chapters/${chapterId}/comments/${commentId}`;
   try {
+    if (canDeleteThreadReplies) {
+      try {
+        const repliesSnap = await getDocs(
+          query(
+            collection(db, 'mangas', mangaId, 'chapters', chapterId, 'comments'),
+            where('parentId', '==', commentId)
+          )
+        );
+        if (!repliesSnap.empty) {
+          for (let i = 0; i < repliesSnap.docs.length; i += 400) {
+            const batch = writeBatch(db);
+            repliesSnap.docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+        }
+      } catch {
+        // Proceed with deleting target comment if reply query/cleanup isn't permitted
+      }
+    }
     await deleteDoc(doc(db, 'mangas', mangaId, 'chapters', chapterId, 'comments', commentId));
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);

@@ -9,12 +9,14 @@ import {
   MessageSquare,
   Minimize,
   Pause,
+  Pencil,
   Play,
   Reply,
   Rows,
   Send,
   SlidersHorizontal,
   Trash2,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -33,12 +35,14 @@ import {
   incrementMangaAndChapterViews,
   postChapterComment,
   saveReadingProgress,
+  updateChapterCommentContent,
 } from '../services/mangaService';
 import {
   Chapter,
   ChapterComment,
   ChapterPage,
   Manga,
+  MAX_LIMITS,
   ReaderFitMode,
   ReaderLayoutMode,
   ReaderMode,
@@ -51,6 +55,7 @@ interface ReaderPageProps {
   previewKey?: string;
   chapterId: string;
   initialPage?: number;
+  initialCommentsOpen?: boolean;
   onNavigate: (route: AppRoute) => void;
   onOpenAuth: () => void;
 }
@@ -93,11 +98,42 @@ function isVideoMimeOrUrl(mime: string, url: string): boolean {
   return /\.(mp4|webm)(\?.*)?$/i.test(url);
 }
 
+function getCommentTimestampMillis(ts: unknown): number {
+  if (
+    ts &&
+    typeof ts === 'object' &&
+    'toMillis' in ts &&
+    typeof (ts as { toMillis: () => number }).toMillis === 'function'
+  ) {
+    return (ts as { toMillis: () => number }).toMillis();
+  }
+  return 0;
+}
+
+function formatCommentTime(ts: unknown): string {
+  const millis = getCommentTimestampMillis(ts);
+  if (millis <= 0) return 'Agora';
+  return new Date(millis).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function wasCommentEdited(c: ChapterComment): boolean {
+  if (c.isHidden) return false;
+  const created = getCommentTimestampMillis(c.createdAt);
+  const updated = getCommentTimestampMillis(c.updatedAt);
+  return created > 0 && updated > created + 1500;
+}
+
 export function ReaderPage({
   mangaId,
   previewKey,
   chapterId,
   initialPage,
+  initialCommentsOpen,
   onNavigate,
   onOpenAuth,
 }: ReaderPageProps) {
@@ -160,13 +196,26 @@ export function ReaderPage({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(Boolean(initialCommentsOpen));
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<ChapterComment | null>(null);
   const [postingComment, setPostingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editCommentDraft, setEditCommentDraft] = useState('');
+  const [savingEditComment, setSavingEditComment] = useState(false);
+  const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
+  const [expandedReplyThreads, setExpandedReplyThreads] = useState<Record<string, boolean>>({});
   const [reportOpen, setReportOpen] = useState(false);
+
+  useEffect(() => {
+    if (initialCommentsOpen) {
+      setSettingsOpen(false);
+      setCommentsOpen(true);
+    }
+  }, [initialCommentsOpen, chapterId]);
 
   // Hydrate saved online reading style once per user session when privateInfo loads
   useEffect(() => {
@@ -241,6 +290,10 @@ export function ReaderPage({
     userInteractedRef.current = false;
     suppressScrollSpyUntilRef.current = 0;
     setResumeSettled(false);
+    setReplyingTo(null);
+    setEditingCommentId(null);
+    setEditCommentDraft('');
+    setConfirmDeleteCommentId(null);
     preloadedImagesRef.current.clear();
     preloadedVideosRef.current.forEach((vid) => {
       vid.pause();
@@ -848,6 +901,7 @@ export function ReaderPage({
     if (!newComment.trim()) return;
     setPostingComment(true);
     try {
+      const targetReply = replyingTo;
       const created = await postChapterComment({
         manga,
         chapter,
@@ -855,13 +909,82 @@ export function ReaderPage({
         userName: profile?.displayName || user.displayName || 'Leitor',
         userAvatar: profile?.avatarUrl || '',
         content: newComment,
-        parentComment: replyingTo,
+        parentComment: targetReply,
       });
       setComments((prev) => [created, ...prev]);
+      if (targetReply) {
+        const rootThreadId = targetReply.parentId || targetReply.id;
+        setExpandedReplyThreads((prev) => ({ ...prev, [rootThreadId]: true }));
+      }
       setNewComment('');
       setReplyingTo(null);
+    } catch (err) {
+      setToastMsg(err instanceof Error ? err.message : 'Erro ao publicar comentário.');
     } finally {
       setPostingComment(false);
+    }
+  };
+
+  const handleSaveEditComment = async (e: React.FormEvent, commentId: string) => {
+    e.preventDefault();
+    if (!user || !manga || !chapter || !editCommentDraft.trim() || savingEditComment) return;
+    setSavingEditComment(true);
+    try {
+      const trimmed = await updateChapterCommentContent(
+        manga.id,
+        chapter.id,
+        commentId,
+        editCommentDraft
+      );
+      const editedAtMs = Date.now();
+      setComments((prev) =>
+        prev.map((item) => {
+          if (item.id !== commentId) return item;
+          const existingCreatedMs = getCommentTimestampMillis(item.createdAt);
+          return {
+            ...item,
+            content: trimmed,
+            createdAt:
+              existingCreatedMs > 0 ? item.createdAt : { toMillis: () => editedAtMs - 3000 },
+            updatedAt: { toMillis: () => editedAtMs },
+          };
+        })
+      );
+      setEditingCommentId(null);
+      setEditCommentDraft('');
+      setToastMsg('Comentário editado.');
+    } catch (err) {
+      setToastMsg(err instanceof Error ? err.message : 'Não foi possível editar o comentário.');
+    } finally {
+      setSavingEditComment(false);
+    }
+  };
+
+  const handleConfirmDeleteComment = async (target: ChapterComment) => {
+    if (!user || !manga || !chapter || deletingCommentId) return;
+    setDeletingCommentId(target.id);
+    try {
+      const canDeleteThreadReplies =
+        !target.parentId && (user.uid === manga.authorId || isAdmin);
+      await deleteChapterComment(manga.id, chapter.id, target.id, canDeleteThreadReplies);
+      setComments((prev) =>
+        prev.filter((item) => {
+          if (item.id === target.id) return false;
+          if (!target.parentId && item.parentId === target.id) return false;
+          return true;
+        })
+      );
+      if (replyingTo?.id === target.id) setReplyingTo(null);
+      if (editingCommentId === target.id) {
+        setEditingCommentId(null);
+        setEditCommentDraft('');
+      }
+      setConfirmDeleteCommentId(null);
+      setToastMsg('Comentário excluído.');
+    } catch (err) {
+      setToastMsg(err instanceof Error ? err.message : 'Não foi possível excluir o comentário.');
+    } finally {
+      setDeletingCommentId(null);
     }
   };
 
@@ -1434,95 +1557,203 @@ export function ReaderPage({
         </footer>
       )}
 
-      {/* Chapter Comments Drawer */}
+      {/* Chapter Comments Drawer (TikTok-style flat threads) */}
       {commentsOpen && (
         <aside
           data-reader-ui
           className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-[#111116] border-l border-white/12 flex flex-col shadow-2xl"
         >
-          <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+          <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
             <h3 className="font-display text-base font-bold text-white">
               Comentários do Capítulo ({comments.length})
             </h3>
             <button
               type="button"
               onClick={() => setCommentsOpen(false)}
-              className="px-3 py-1.5 rounded-lg text-xs text-zinc-300 hover:bg-white/8"
+              aria-label="Fechar comentários"
+              className="p-2 rounded-lg text-zinc-300 hover:text-white hover:bg-white/8 transition-colors"
             >
-              Fechar
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="flex-1 overflow-y-auto divide-y divide-white/8 px-4 sm:px-5">
             {comments.length === 0 ? (
-              <p className="text-sm text-zinc-500 text-center py-8">
+              <p className="text-sm text-zinc-500 text-center py-12">
                 Nenhum comentário neste capítulo ainda. Seja o primeiro!
               </p>
             ) : (
               topComments.map((c) => {
                 const replies = repliesByParentId.get(c.id) || [];
                 const isTopAuthor = Boolean(c.isAuthorReply || c.userId === manga.authorId);
+                const hasAuthorReply = replies.some(
+                  (r) => r.isAuthorReply || r.userId === manga.authorId
+                );
+                const canEditTop = Boolean(user?.uid === c.userId && !c.isHidden);
+                const canDeleteTop = Boolean(
+                  user?.uid === c.userId || user?.uid === manga.authorId || isAdmin
+                );
+                const isExpanded =
+                  expandedReplyThreads[c.id] ?? (hasAuthorReply || replies.length <= 2);
+                const visibleReplies = isExpanded ? replies : replies.slice(0, 1);
+                const hiddenRepliesCount = Math.max(0, replies.length - visibleReplies.length);
+
                 return (
-                  <div
-                    key={c.id}
-                    className="bg-[#181820] border border-white/8 rounded-xl p-3.5 space-y-2.5"
-                  >
+                  <div key={c.id} className="py-4 space-y-2.5">
+                    {/* Root Comment */}
                     <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs font-semibold text-white truncate">
-                            {c.userName}
-                          </span>
-                          {isTopAuthor && (
-                            <span className="text-[11px] font-semibold text-[#FB7185] shrink-0">
-                              Autor
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span className="font-semibold text-white truncate">{c.userName}</span>
+                            {isTopAuthor && (
+                              <span className="text-[11px] font-semibold text-[#FB7185] shrink-0">
+                                Autor
+                              </span>
+                            )}
+                            <span className="text-[11px] font-mono-tabular text-zinc-500">
+                              · {formatCommentTime(c.createdAt)}
+                              {wasCommentEdited(c) ? ' · editado' : ''}
                             </span>
+                          </div>
+                          {hasAuthorReply && (
+                            <p className="text-[11px] font-medium text-[#FB7185]">
+                              O autor respondeu
+                            </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!user) {
-                                onOpenAuth();
-                                return;
-                              }
-                              setReplyingTo(c);
-                            }}
-                            className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-white"
-                          >
-                            <Reply className="w-3 h-3" />
-                            Responder
-                          </button>
-                          {(user?.uid === c.userId || user?.uid === manga.authorId || isAdmin) && (
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {canEditTop && (
                             <button
                               type="button"
-                              onClick={async () => {
-                                await deleteChapterComment(manga.id, chapter.id, c.id);
-                                setComments((prev) => prev.filter((item) => item.id !== c.id));
+                              onClick={() => {
+                                setConfirmDeleteCommentId(null);
+                                if (editingCommentId === c.id) {
+                                  setEditingCommentId(null);
+                                  setEditCommentDraft('');
+                                } else {
+                                  setEditingCommentId(c.id);
+                                  setEditCommentDraft(c.content);
+                                }
                               }}
-                              aria-label="Excluir comentário"
-                              className="text-zinc-500 hover:text-rose-400"
+                              aria-label="Editar comentário"
+                              title="Editar comentário"
+                              className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/6 transition-colors"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Pencil className="w-3.5 h-3.5" />
                             </button>
                           )}
+
+                          {canDeleteTop &&
+                            (confirmDeleteCommentId === c.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={deletingCommentId === c.id}
+                                  onClick={() => void handleConfirmDeleteComment(c)}
+                                  className="px-2 py-1 rounded-md bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold disabled:opacity-40"
+                                >
+                                  Excluir
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteCommentId(null)}
+                                  className="px-2 py-1 rounded-md bg-white/8 text-[11px] text-zinc-300"
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingCommentId(null);
+                                  setConfirmDeleteCommentId(c.id);
+                                }}
+                                aria-label="Excluir comentário"
+                                title="Excluir comentário"
+                                className="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            ))}
                         </div>
                       </div>
-                      <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                        {c.content}
-                      </p>
+
+                      {editingCommentId === c.id ? (
+                        <form
+                          onSubmit={(e) => void handleSaveEditComment(e, c.id)}
+                          className="space-y-2 pt-1"
+                        >
+                          <input
+                            type="text"
+                            maxLength={MAX_LIMITS.COMMENT_CONTENT}
+                            value={editCommentDraft}
+                            onChange={(e) => setEditCommentDraft(e.target.value)}
+                            autoFocus
+                            className="w-full min-h-[38px] px-3 rounded-xl bg-[#08080A] border border-white/15 text-xs text-white focus:outline-none focus:border-[#E11D48]"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="submit"
+                              disabled={savingEditComment || !editCommentDraft.trim()}
+                              className="px-3 py-1.5 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-white text-[11px] font-semibold disabled:opacity-40"
+                            >
+                              {savingEditComment ? 'Salvando...' : 'Salvar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCommentId(null);
+                                setEditCommentDraft('');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-white/8 text-[11px] text-zinc-300"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <p className="text-[13px] text-zinc-200 leading-relaxed whitespace-pre-wrap">
+                          {c.content}
+                        </p>
+                      )}
+
+                      <div className="flex items-center gap-3 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!user) {
+                              onOpenAuth();
+                              return;
+                            }
+                            setEditingCommentId(null);
+                            setReplyingTo(c);
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-400 hover:text-white transition-colors"
+                        >
+                          <Reply className="w-3 h-3" />
+                          Responder
+                        </button>
+                      </div>
                     </div>
 
+                    {/* Flat TikTok-style Replies Stack (one below another, no cascade borders) */}
                     {replies.length > 0 && (
-                      <div className="ml-3 pl-3 border-l border-white/10 space-y-2.5 pt-1">
-                        {replies.map((r) => {
+                      <div className="pl-5 pt-1 space-y-3">
+                        {visibleReplies.map((r) => {
                           const isReplyAuthor = Boolean(
                             r.isAuthorReply || r.userId === manga.authorId
                           );
+                          const canEditReply = Boolean(user?.uid === r.userId && !r.isHidden);
+                          const canDeleteReply = Boolean(
+                            user?.uid === r.userId || user?.uid === manga.authorId || isAdmin
+                          );
+
                           return (
                             <div key={r.id} className="space-y-1">
-                              <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-start justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] min-w-0">
                                   <span className="font-semibold text-white truncate">
                                     {r.userName}
@@ -1533,51 +1764,159 @@ export function ReaderPage({
                                     </span>
                                   )}
                                   {r.replyToUserName && (
-                                    <span className="text-zinc-500 truncate">
-                                      · para {r.replyToUserName}
+                                    <span className="text-zinc-400 truncate">
+                                      ▸ {r.replyToUserName}
                                     </span>
                                   )}
+                                  <span className="font-mono-tabular text-zinc-500">
+                                    · {formatCommentTime(r.createdAt)}
+                                    {wasCommentEdited(r) ? ' · editado' : ''}
+                                  </span>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (!user) {
-                                        onOpenAuth();
-                                        return;
-                                      }
-                                      setReplyingTo(r);
-                                    }}
-                                    className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-white"
-                                  >
-                                    <Reply className="w-3 h-3" />
-                                    Responder
-                                  </button>
-                                  {(user?.uid === r.userId ||
-                                    user?.uid === manga.authorId ||
-                                    isAdmin) && (
+
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {canEditReply && (
                                     <button
                                       type="button"
-                                      onClick={async () => {
-                                        await deleteChapterComment(manga.id, chapter.id, r.id);
-                                        setComments((prev) =>
-                                          prev.filter((item) => item.id !== r.id)
-                                        );
+                                      onClick={() => {
+                                        setConfirmDeleteCommentId(null);
+                                        if (editingCommentId === r.id) {
+                                          setEditingCommentId(null);
+                                          setEditCommentDraft('');
+                                        } else {
+                                          setEditingCommentId(r.id);
+                                          setEditCommentDraft(r.content);
+                                        }
                                       }}
-                                      aria-label="Excluir resposta"
-                                      className="text-zinc-500 hover:text-rose-400"
+                                      aria-label="Editar resposta"
+                                      title="Editar resposta"
+                                      className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-white/6 transition-colors"
                                     >
-                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <Pencil className="w-3 h-3" />
                                     </button>
                                   )}
+
+                                  {canDeleteReply &&
+                                    (confirmDeleteCommentId === r.id ? (
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          disabled={deletingCommentId === r.id}
+                                          onClick={() => void handleConfirmDeleteComment(r)}
+                                          className="px-2 py-0.5 rounded-md bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold disabled:opacity-40"
+                                        >
+                                          Excluir
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeleteCommentId(null)}
+                                          className="px-2 py-0.5 rounded-md bg-white/8 text-[11px] text-zinc-300"
+                                        >
+                                          Não
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingCommentId(null);
+                                          setConfirmDeleteCommentId(r.id);
+                                        }}
+                                        aria-label="Excluir resposta"
+                                        title="Excluir resposta"
+                                        className="p-1 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    ))}
                                 </div>
                               </div>
-                              <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                                {r.content}
-                              </p>
+
+                              {editingCommentId === r.id ? (
+                                <form
+                                  onSubmit={(e) => void handleSaveEditComment(e, r.id)}
+                                  className="space-y-2 pt-1"
+                                >
+                                  <input
+                                    type="text"
+                                    maxLength={MAX_LIMITS.COMMENT_CONTENT}
+                                    value={editCommentDraft}
+                                    onChange={(e) => setEditCommentDraft(e.target.value)}
+                                    autoFocus
+                                    className="w-full min-h-[36px] px-3 rounded-xl bg-[#08080A] border border-white/15 text-xs text-white focus:outline-none focus:border-[#E11D48]"
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="submit"
+                                      disabled={savingEditComment || !editCommentDraft.trim()}
+                                      className="px-3 py-1 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-white text-[11px] font-semibold disabled:opacity-40"
+                                    >
+                                      {savingEditComment ? 'Salvando...' : 'Salvar'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingCommentId(null);
+                                        setEditCommentDraft('');
+                                      }}
+                                      className="px-3 py-1 rounded-lg bg-white/8 text-[11px] text-zinc-300"
+                                    >
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                </form>
+                              ) : (
+                                <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                                  {r.content}
+                                </p>
+                              )}
+
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!user) {
+                                      onOpenAuth();
+                                      return;
+                                    }
+                                    setEditingCommentId(null);
+                                    setReplyingTo(r);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-400 hover:text-white transition-colors"
+                                >
+                                  <Reply className="w-3 h-3" />
+                                  Responder
+                                </button>
+                              </div>
                             </div>
                           );
                         })}
+
+                        {hiddenRepliesCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedReplyThreads((prev) => ({ ...prev, [c.id]: true }))
+                            }
+                            className="text-[11px] font-medium text-zinc-400 hover:text-white transition-colors"
+                          >
+                            Ver mais {hiddenRepliesCount}{' '}
+                            {hiddenRepliesCount === 1 ? 'resposta' : 'respostas'}
+                          </button>
+                        ) : (
+                          replies.length > 2 &&
+                          isExpanded && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedReplyThreads((prev) => ({ ...prev, [c.id]: false }))
+                              }
+                              className="text-[11px] font-medium text-zinc-500 hover:text-zinc-300 transition-colors"
+                            >
+                              Ocultar respostas
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
@@ -1607,7 +1946,7 @@ export function ReaderPage({
             <div className="flex gap-2">
               <input
                 type="text"
-                maxLength={1500}
+                maxLength={MAX_LIMITS.COMMENT_CONTENT}
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
                 placeholder={

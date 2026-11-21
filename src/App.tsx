@@ -193,6 +193,7 @@ function AppShell() {
             mangaId={route.mangaId}
             chapterId={route.chapterId}
             initialPage={route.initialPage}
+            initialCommentsOpen={route.openComments}
             onNavigate={navigate}
             onOpenAuth={() => setAuthModalOpen(true)}
           />
